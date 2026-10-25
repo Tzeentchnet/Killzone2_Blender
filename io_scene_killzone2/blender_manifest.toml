@@ -1,0 +1,17 @@
+schema_version = "1.0.0"
+
+id = "io_scene_killzone2"
+version = "0.5.3"
+name = "Killzone 2 Asset Importer"
+tagline = "Import KZ2 models, textured maps, rigs, and animations"
+maintainer = "Killzone 2 Blender contributors"
+type = "add-on"
+
+blender_version_min = "5.2.0"
+
+license = [
+  "SPDX:MIT",
+]
+
+[permissions]
+files = "Read selected CORE/PSARC files and write a local resource index"

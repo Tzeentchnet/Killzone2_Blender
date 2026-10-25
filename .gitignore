@@ -1,0 +1,33 @@
+# Python caches and tooling
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Build output
+build/
+dist/
+
+# Blender output and backups
+*.blend
+*.blend[0-9]*
+
+# Local game data and analysis output
+*.core
+*.psarc
+*.sqlite
+*.sqlite3
+*.db
+kz2-audit.json
+docs/scratchpad.md
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
