@@ -52,7 +52,7 @@ explicitly distinguish validated behavior from guesses and unknown fields.
 
 ## Install
 
-1. Build or download `io_scene_killzone2.zip`.
+1. Build or download `io_scene_killzone2-<version>.zip`.
 2. In Blender 5.2, open **Edit > Preferences > Get Extensions**.
 3. Use **Install from Disk** and select the ZIP.
 4. Enable **Killzone 2 Asset Importer** if Blender does not enable it
@@ -64,7 +64,8 @@ To build the ZIP from this repository:
 python .\tools\build_extension.py
 ```
 
-The build is written to `.\dist\io_scene_killzone2.zip`.
+The build is written to `.\dist\io_scene_killzone2-<version>.zip`, using the
+version declared in `blender_manifest.toml`.
 
 ## Import
 
