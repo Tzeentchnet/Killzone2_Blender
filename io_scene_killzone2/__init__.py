@@ -7,7 +7,7 @@ _CONSOLE_HANDLER_NAME = f"{__package__}.console"
 bl_info = {
     "name": "Killzone 2 Asset Importer",
     "author": "Killzone 2 Blender contributors",
-    "version": (0, 5, 3),
+    "version": (0, 5, 4),
     "blender": (5, 2, 0),
     "location": "3D View > Sidebar > KZ2 Tools; File > Import",
     "description": (

@@ -1,8 +1,9 @@
 # Blender 5.2 compatibility and feature audit
 
-Audit of the `io_scene_killzone2` extension (version 0.5.3) against Blender
-**5.2.3 LTS**. The changes listed under
-[Implemented](#implemented-by-this-audit) are included with this audit.
+Audit of the `io_scene_killzone2` extension, originally version 0.5.3 and
+integrated for version 0.5.4, against Blender **5.2.3 LTS**. The changes
+listed under [Implemented](#implemented-by-this-audit) are included with this
+audit.
 
 ## Method
 
@@ -132,5 +133,5 @@ retail data first.
 python3 -m venv .bpy && .bpy/bin/pip install bpy==5.2.3
 .bpy/bin/python -m unittest discover -s tests -v
 python3 tools/build_extension.py
-.bpy/bin/python .bpy/lib/python3.13/site-packages/bpy/5.2/scripts/addons_core/bl_pkg/cli/blender_ext.py validate dist/io_scene_killzone2-0.5.3.zip
+.bpy/bin/python .bpy/lib/python3.13/site-packages/bpy/5.2/scripts/addons_core/bl_pkg/cli/blender_ext.py validate dist/io_scene_killzone2-0.5.4.zip
 ```

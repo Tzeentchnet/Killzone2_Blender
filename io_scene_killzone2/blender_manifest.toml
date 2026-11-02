@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "io_scene_killzone2"
-version = "0.5.3"
+version = "0.5.4"
 name = "Killzone 2 Asset Importer"
 tagline = "Import KZ2 models, textured maps, rigs, and animations"
 maintainer = "Killzone 2 Blender contributors"

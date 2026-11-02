@@ -1,12 +1,15 @@
 # Changelog
 
 This file records user-visible extension changes and significant validation
-results. The project has not assigned a new release version to the changes
-below; the extension manifest remains at version `0.5.3`.
+results.
 
 ## Unreleased
 
-### 2026-11-02 - Blender 5.2 audit integration
+No changes yet.
+
+## 0.5.4 - 2026-11-02
+
+### Blender 5.2 audit integration
 
 Included commits:
 
@@ -93,4 +96,3 @@ not implemented because the intervening block's semantics are still unknown.
 The inventory, evidence, and acceptance criteria for future support are in
 [Skeletons and animation](./animation.md#retail-interstitial-header-variants)
 and [Known unknowns](./known-unknowns.md).
-
