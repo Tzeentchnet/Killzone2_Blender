@@ -53,6 +53,11 @@ An enforced rule is the importer's compatibility contract, not proof that all
 valid engine files must obey it. Other regions, patches, development builds,
 or later engine revisions may use valid layouts that this importer rejects.
 
+## Change history
+
+- [Changelog](./changelog.md): user-visible changes, compatibility notes, and
+  validation results for unreleased work.
+
 ## Format references
 
 - [PSARC container](./psarc.md): header, TOC, manifest, block decoding, and
