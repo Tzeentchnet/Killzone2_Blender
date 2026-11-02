@@ -56,6 +56,11 @@ from .kz2_assets.psarc import Psarc, PsarcEntry
 from .kz2_assets.resolver import PsarcResourceResolver, ResolvedResource
 
 _LOG = logging.getLogger(__name__)
+_LINEAR_INTERPOLATION = (
+    bpy.types.Keyframe.bl_rna.properties["interpolation"]
+    .enum_items["LINEAR"]
+    .value
+)
 
 
 @dataclass(slots=True)
@@ -2197,6 +2202,11 @@ def _create_mesh_data(
             )
         mesh_data.normals_split_custom_set_from_vertices(normals)
 
+    # Resolve each loop's vertex once and bulk-write UV layers with
+    # foreach_set; per-loop RNA assignment dominates import time on large
+    # level meshes.
+    loop_vertices = [0] * len(mesh_data.loops)
+    mesh_data.loops.foreach_get("vertex_index", loop_vertices)
     for uv_index, semantic in enumerate(
         (
             VertexSemantic.UV0,
@@ -2211,22 +2221,30 @@ def _create_mesh_data(
         values = decode_semantic(vertex_array, semantic)
         if values is None:
             continue
+        vertex_pairs = [
+            blender_uv_pairs(value, flip_v=options.flip_uv_v)
+            for value in values
+        ]
         layer = mesh_data.uv_layers.new(name=f"UV{uv_index}")
-        for loop in mesh_data.loops:
-            source_uv, _ = blender_uv_pairs(
-                values[loop.vertex_index],
-                flip_v=options.flip_uv_v,
-            )
-            layer.data[loop.index].uv = source_uv
+        layer.data.foreach_set(
+            "uv",
+            [
+                component
+                for vertex_index in loop_vertices
+                for component in vertex_pairs[vertex_index][0]
+            ],
+        )
         if semantic != VertexSemantic.UV0:
             continue
         diffuse_layer = mesh_data.uv_layers.new(name="DiffuseUV")
-        for loop in mesh_data.loops:
-            _, diffuse_uv = blender_uv_pairs(
-                values[loop.vertex_index],
-                flip_v=options.flip_uv_v,
-            )
-            diffuse_layer.data[loop.index].uv = diffuse_uv
+        diffuse_layer.data.foreach_set(
+            "uv",
+            [
+                component
+                for vertex_index in loop_vertices
+                for component in vertex_pairs[vertex_index][1]
+            ],
+        )
         mesh_data.uv_layers.active = diffuse_layer
         diffuse_layer.active_render = True
     return mesh_data
@@ -2243,6 +2261,9 @@ def _add_skin_weights(
         for index, name in enumerate(bindings.bone_names)
     }
     invalid: set[int] = set()
+    # Quantized KZ2 weights repeat heavily, so batching vertices that share a
+    # (bone, weight) pair turns one RNA call per influence into a few hundred.
+    batches: dict[tuple[int, float], list[int]] = {}
     for vertex_index, vertex in enumerate(vertices):
         for bone_index, weight in zip(
             vertex.bone_indices,
@@ -2251,11 +2272,12 @@ def _add_skin_weights(
         ):
             if weight <= 0:
                 continue
-            group = groups.get(bone_index)
-            if group is None:
+            if bone_index not in groups:
                 invalid.add(bone_index)
                 continue
-            group.add((vertex_index,), weight, "ADD")
+            batches.setdefault((bone_index, weight), []).append(vertex_index)
+    for (bone_index, weight), vertex_indices in batches.items():
+        groups[bone_index].add(vertex_indices, weight, "ADD")
     if invalid:
         result.warnings.append(
             f"{obj.name}: ignored out-of-range skin bone indices {sorted(invalid)}"
@@ -2669,6 +2691,17 @@ def _create_action(
         if animation.prefix is not None and animation.prefix.name
         else f"EA02_{record.index}_{record.display_id[:8]}"
     )
+    # Validate before creating or assigning anything: this avoids orphan
+    # Actions on failure, and Blender 5.2 crashes when a slot is assigned to
+    # an armature that has no bones.
+    if not joints or len(joints) != clip.joint_count:
+        raise ValueError(
+            f"animation has {clip.joint_count} joints but target armature has "
+            f"{len(joints)}"
+        )
+    if scene_fps <= 0.0:
+        raise ValueError(f"scene frame rate must be positive, got {scene_fps}")
+
     action = bpy.data.actions.new(action_name)
     action.use_fake_user = True
     slot = action.slots.new(id_type="OBJECT", name=armature_object.name)
@@ -2680,13 +2713,6 @@ def _create_action(
     armature_object.animation_data.action = action
     armature_object.animation_data.action_slot = slot
 
-    if not joints or len(joints) != clip.joint_count:
-        raise ValueError(
-            f"animation has {clip.joint_count} joints but target armature has "
-            f"{len(joints)}"
-        )
-    if scene_fps <= 0.0:
-        raise ValueError(f"scene frame rate must be positive, got {scene_fps}")
     animation_default_components = tuple(
         joint.animation_default_local.decompose() for joint in joints
     )
@@ -2794,8 +2820,10 @@ def _create_action(
             for coordinate in (frame, value)
         ]
         fcurve.keyframe_points.foreach_set("co", coordinates)
-        for point in fcurve.keyframe_points:
-            point.interpolation = "LINEAR"
+        fcurve.keyframe_points.foreach_set(
+            "interpolation",
+            [_LINEAR_INTERPOLATION] * len(frames),
+        )
         fcurve.update()
 
     action.frame_start = frames[0]

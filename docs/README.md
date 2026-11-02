@@ -69,6 +69,8 @@ or later engine revisions may use valid layouts that this importer rejects.
   animation wrappers, `EA02`, channel packing, and sampling limitations.
 - [Known unknowns and hypotheses](./known-unknowns.md): consolidated research
   gaps, heuristics, and unsupported variants.
+- [Blender 5.2 audit](./blender-5.2-audit.md): Blender API usage verified
+  against 5.2.3 LTS, implemented improvements, and prioritized recommendations.
 
 ## General binary conventions
 

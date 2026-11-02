@@ -12,13 +12,20 @@ from typing import ClassVar
 import bpy
 from bpy.props import (
     BoolProperty,
+    CollectionProperty,
     EnumProperty,
     FloatProperty,
     IntProperty,
     StringProperty,
 )
-from bpy.types import AddonPreferences, Operator, Panel
-from bpy_extras.io_utils import ImportHelper
+from bpy.types import (
+    AddonPreferences,
+    FileHandler,
+    Operator,
+    OperatorFileListElement,
+    Panel,
+)
+from bpy_extras.io_utils import ImportHelper, poll_file_object_drop
 
 from .import_scene import (
     ImportOptions,
@@ -57,6 +64,19 @@ def _invalidate_runtime_cache() -> None:
     global _cached_json, _cached_catalog
     _cached_json = ""
     _cached_catalog = None
+    _level_items_cache.clear()
+
+
+def _ensure_object_mode(context: bpy.types.Context) -> None:
+    """Leave Edit/Pose/etc. before importing.
+
+    Armature creation temporarily enters Edit Mode on new objects; doing that
+    while another object is being edited leaves Blender's mode state
+    inconsistent.
+    """
+    active = context.view_layer.objects.active
+    if active is not None and active.mode != "OBJECT":
+        bpy.ops.object.mode_set(mode="OBJECT")
 
 
 def _addon_preferences(
@@ -152,13 +172,32 @@ def _selected_level(
     return level
 
 
+_NO_CATALOG_LEVEL_ITEMS = [
+    (_NO_ITEMS, "No Maps", "Index the configured PSARC first")
+]
+_NO_GROUP_LEVEL_ITEMS = [
+    (_NO_ITEMS, "No Maps", "No maps were cached for this group")
+]
+# Blender requires Python to keep the strings returned by a dynamic
+# EnumProperty items callback alive; returning freshly built strings can show
+# garbled labels or crash. Cache the list per catalog and map group.
+_level_items_cache: dict[
+    str,
+    tuple[EntityAssetCatalog, list[tuple[str, str, str]]],
+] = {}
+
+
 def _level_asset_items(
     _scene: bpy.types.Scene,
     context: bpy.types.Context | None,
 ) -> list[tuple[str, str, str]]:
     catalog = _safe_current_catalog(context)
     if catalog is None:
-        return [(_NO_ITEMS, "No Maps", "Index the configured PSARC first")]
+        return _NO_CATALOG_LEVEL_ITEMS
+    kind = context.scene.kz2_level_kind
+    cached = _level_items_cache.get(kind)
+    if cached is not None and cached[0] is catalog:
+        return cached[1]
     items = [
         (
             str(index),
@@ -169,11 +208,10 @@ def _level_asset_items(
             ),
         )
         for index, level in enumerate(catalog.levels)
-        if level.kind == context.scene.kz2_level_kind
+        if level.kind == kind
     ]
-    return items or [
-        (_NO_ITEMS, "No Maps", "No maps were cached for this group")
-    ]
+    _level_items_cache[kind] = (catalog, items or _NO_GROUP_LEVEL_ITEMS)
+    return _level_items_cache[kind][1]
 
 
 def _reset_level_section_selection(
@@ -491,8 +529,9 @@ class KZ2_OT_open_preferences(Operator):
     bl_label = "Open Add-on Preferences"
 
     def execute(self, context: bpy.types.Context):
-        context.preferences.active_section = "ADDONS"
-        bpy.ops.screen.userpref_show("INVOKE_DEFAULT")
+        # addon_show opens Preferences, filters to this extension, and
+        # expands its settings instead of leaving users to search for it.
+        bpy.ops.preferences.addon_show(module=_ADDON_ID)
         return {"FINISHED"}
 
 
@@ -573,14 +612,119 @@ class IMPORT_SCENE_OT_killzone2_core(Operator, ImportHelper):
         subtype="FILE_PATH",
         default="",
     )
+    # Multi-file selection in the file browser and drag-and-drop through
+    # KZ2_FH_core both populate directory + files.
+    directory: StringProperty(  # type: ignore[valid-type]
+        subtype="DIR_PATH",
+        options={"HIDDEN", "SKIP_SAVE"},
+    )
+    files: CollectionProperty(  # type: ignore[valid-type]
+        type=OperatorFileListElement,
+        options={"HIDDEN", "SKIP_SAVE"},
+    )
+
+    def invoke(self, context: bpy.types.Context, event: bpy.types.Event):
+        # Drag-and-drop sets filepath, so show an options dialog instead of
+        # reopening the file browser.
+        return self.invoke_popup(context)
+
+    def draw(self, context: bpy.types.Context) -> None:
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+
+        header, body = layout.panel("KZ2_import_include", default_closed=False)
+        header.label(text="Include")
+        if body:
+            body.prop(self, "import_static_meshes")
+            body.prop(self, "import_skinned_meshes")
+            body.prop(self, "import_skeletons")
+            body.prop(self, "import_animations")
+            body.prop(self, "import_materials")
+            body.prop(self, "import_level_objects")
+
+        header, body = layout.panel("KZ2_import_transform", default_closed=False)
+        header.label(text="Transform")
+        if body:
+            body.prop(self, "global_scale")
+            body.prop(self, "flip_uv_v")
+
+        header, body = layout.panel("KZ2_import_resources", default_closed=True)
+        header.label(text="External Resources")
+        if body:
+            body.prop(self, "source_psarc", text="PSARC")
+            if not self.source_psarc:
+                body.label(text="Blank uses the add-on preferences PSARC")
+
+        header, body = layout.panel("KZ2_import_diagnostics", default_closed=True)
+        header.label(text="Diagnostics")
+        if body:
+            body.prop(self, "convert_map_axes")
+
+    def _selected_paths(self) -> list[str]:
+        if self.directory and self.files:
+            directory = Path(self.directory)
+            return [
+                str(directory / selected.name)
+                for selected in self.files
+                if selected.name
+            ]
+        return [self.filepath] if self.filepath else []
 
     def execute(self, context: bpy.types.Context):
+        paths = self._selected_paths()
+        if not paths:
+            self.report({"ERROR"}, "No Killzone 2 CORE file was selected")
+            return {"CANCELLED"}
+        _ensure_object_mode(context)
         try:
             source_psarc = self.source_psarc or _configured_psarc(context)
             resource_index_path = _configured_resource_index(
                 context,
                 source_psarc,
             )
+        except (Kz2AssetError, OSError) as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+
+        combined = ImportResult()
+        imported = 0
+        manager = context.window_manager
+        manager.progress_begin(0, len(paths))
+        try:
+            for number, path in enumerate(paths):
+                manager.progress_update(number)
+                result = self._import_one(
+                    context,
+                    path,
+                    source_psarc,
+                    resource_index_path,
+                )
+                if result is None:
+                    continue
+                imported += 1
+                _merge_import_results(combined, result)
+        finally:
+            manager.progress_end()
+        if not imported:
+            return {"CANCELLED"}
+        if len(paths) > 1:
+            combined.warnings.insert(
+                0,
+                f"Imported {imported} of {len(paths)} CORE files",
+            )
+        _report_import_result(self, combined)
+        return {"FINISHED"}
+
+    def _import_one(
+        self,
+        context: bpy.types.Context,
+        filepath: str,
+        source_psarc: str,
+        resource_index_path: str,
+    ) -> ImportResult | None:
+        name = Path(filepath).name
+        try:
             options = ImportOptions(
                 global_scale=self.global_scale,
                 flip_uv_v=self.flip_uv_v,
@@ -594,17 +738,38 @@ class IMPORT_SCENE_OT_killzone2_core(Operator, ImportHelper):
                 source_psarc=source_psarc,
                 resource_index_path=resource_index_path,
             )
-            result = import_core_file(context, self.filepath, options)
+            return import_core_file(context, filepath, options)
         except Kz2AssetError as exc:
-            _LOG.error("CORE import failed: %s", exc)
-            self.report({"ERROR"}, str(exc))
-            return {"CANCELLED"}
+            _LOG.error("CORE import failed for %s: %s", name, exc)
+            self.report({"ERROR"}, f"{name}: {exc}")
         except (OSError, ValueError) as exc:
-            _LOG.error("CORE import failed: %s", exc)
-            self.report({"ERROR"}, f"Killzone 2 import failed: {exc}")
-            return {"CANCELLED"}
-        _report_import_result(self, result)
-        return {"FINISHED"}
+            _LOG.error("CORE import failed for %s: %s", name, exc)
+            self.report({"ERROR"}, f"Killzone 2 import failed ({name}): {exc}")
+        return None
+
+
+class KZ2_FH_core(FileHandler):
+    """Drag-and-drop .core files into the 3D Viewport or Outliner."""
+
+    bl_idname = "KZ2_FH_core"
+    bl_label = "Killzone 2 CORE"
+    bl_import_operator = IMPORT_SCENE_OT_killzone2_core.bl_idname
+    bl_file_extensions = ".core"
+
+    @classmethod
+    def poll_drop(cls, context: bpy.types.Context) -> bool:
+        return poll_file_object_drop(context)
+
+
+def _merge_import_results(target: ImportResult, source: ImportResult) -> None:
+    target.meshes += source.meshes
+    target.level_instances += source.level_instances
+    target.entity_instances += source.entity_instances
+    target.armatures += source.armatures
+    target.actions += source.actions
+    target.materials += source.materials
+    target.images += source.images
+    target.warnings.extend(source.warnings)
 
 
 class KZ2_OT_import_cached_entity(Operator):
@@ -620,6 +785,7 @@ class KZ2_OT_import_cached_entity(Operator):
         return catalog is not None and bool(catalog.entities)
 
     def execute(self, context: bpy.types.Context):
+        _ensure_object_mode(context)
         try:
             catalog = _current_catalog(context)
             if catalog is None:
@@ -750,6 +916,7 @@ class KZ2_OT_import_level(Operator):
         return catalog is not None and bool(catalog.levels)
 
     def execute(self, context: bpy.types.Context):
+        _ensure_object_mode(context)
         manager = context.window_manager
         manager.progress_begin(0, 100)
         try:
@@ -804,12 +971,14 @@ class KZ2_PT_tools(Panel):
     def draw(self, context: bpy.types.Context) -> None:
         layout = self.layout
 
-        core_box = layout.box()
-        core_box.label(text="Import Extracted CORE", icon="FILE")
-        core_box.operator(
-            IMPORT_SCENE_OT_killzone2_core.bl_idname,
-            icon="IMPORT",
-        )
+        header, body = layout.panel("KZ2_tools_core", default_closed=False)
+        header.label(text="Extracted CORE", icon="FILE")
+        if body:
+            body.operator(
+                IMPORT_SCENE_OT_killzone2_core.bl_idname,
+                icon="IMPORT",
+            )
+            body.label(text="Tip: drag .core files into the viewport.")
 
         try:
             preferences = _addon_preferences(context)
@@ -862,8 +1031,30 @@ class KZ2_PT_tools(Panel):
             icon="PREFERENCES",
         )
 
-        level_box = layout.box()
-        level_box.label(text="Import Complete Level", icon="WORLD_DATA")
+        header, body = layout.panel("KZ2_tools_levels", default_closed=False)
+        header.label(text="Complete Level", icon="WORLD_DATA")
+        if body:
+            self._draw_levels(context, body, catalog)
+
+        header, body = layout.panel("KZ2_tools_entities", default_closed=False)
+        header.label(text="Cached Entity", icon="OBJECT_DATA")
+        if body:
+            self._draw_entities(context, body, catalog)
+
+        if catalog.issues:
+            warning = layout.row()
+            warning.alert = True
+            warning.label(
+                text=f"{len(catalog.issues)} scan issue(s)",
+                icon="ERROR",
+            )
+
+    def _draw_levels(
+        self,
+        context: bpy.types.Context,
+        level_box: bpy.types.UILayout,
+        catalog: EntityAssetCatalog,
+    ) -> None:
         if not catalog.levels:
             level_box.label(
                 text="Map hierarchy is not cached yet.",
@@ -940,8 +1131,12 @@ class KZ2_PT_tools(Panel):
                     icon="INFO",
                 )
 
-        entity_box = layout.box()
-        entity_box.label(text="Import Cached Entity", icon="OBJECT_DATA")
+    def _draw_entities(
+        self,
+        context: bpy.types.Context,
+        entity_box: bpy.types.UILayout,
+        catalog: EntityAssetCatalog,
+    ) -> None:
         if not catalog.entities:
             entity_box.label(text="No importable entities were cached")
             return
@@ -1073,13 +1268,6 @@ class KZ2_PT_tools(Panel):
             KZ2_OT_import_cached_entity.bl_idname,
             icon="IMPORT",
         )
-        if catalog.issues:
-            warning = layout.row()
-            warning.alert = True
-            warning.label(
-                text=f"{len(catalog.issues)} scan issue(s)",
-                icon="ERROR",
-            )
 
 
 def _menu_import(self, context: bpy.types.Context) -> None:
@@ -1095,6 +1283,7 @@ _CLASSES = (
     KZ2_OT_scan_levels,
     KZ2_OT_open_preferences,
     IMPORT_SCENE_OT_killzone2_core,
+    KZ2_FH_core,
     KZ2_OT_import_cached_entity,
     KZ2_OT_select_cached_entity,
     KZ2_OT_set_entity_page,

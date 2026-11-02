@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import struct
-import tempfile
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import bpy
 
@@ -226,7 +224,8 @@ class MaterialBuilder:
         material = bpy.data.materials.new(
             f"{base_name}_T{technique_index:02d}"
         )
-        material.use_nodes = True
+        # Blender 5.x materials always own a node tree; Material.use_nodes is
+        # deprecated and scheduled for removal in Blender 6.0.
         material.diffuse_color = (0.8, 0.8, 0.8, 1.0)
         material["kz2_object_index"] = record.index
         material["kz2_object_id"] = record.display_id
@@ -985,16 +984,11 @@ def _pack_image(
     filename: str,
     is_float: bool,
 ) -> None:
+    # Packing a generated image encodes it in memory (PNG for byte buffers,
+    # OpenEXR for float buffers), so no temporary file round-trip is needed.
     suffix = ".exr" if is_float else ".png"
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temporary:
-        temporary_path = Path(temporary.name)
-    try:
-        image.filepath_raw = str(temporary_path)
-        image.file_format = "OPEN_EXR" if is_float else "PNG"
-        image.save()
-        image.pack()
-        if image.packed_file is None:
-            raise RuntimeError("Blender did not create a packed image")
-    finally:
-        temporary_path.unlink(missing_ok=True)
+    image.file_format = "OPEN_EXR" if is_float else "PNG"
+    image.pack()
+    if image.packed_file is None:
+        raise RuntimeError("Blender did not create a packed image")
     image.filepath_raw = f"//{filename}{suffix}"

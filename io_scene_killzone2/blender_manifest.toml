@@ -6,6 +6,9 @@ name = "Killzone 2 Asset Importer"
 tagline = "Import KZ2 models, textured maps, rigs, and animations"
 maintainer = "Killzone 2 Blender contributors"
 type = "add-on"
+website = "https://github.com/tzeentchnet/killzone2_blender"
+
+tags = ["Import-Export"]
 
 blender_version_min = "5.2.0"
 
@@ -15,3 +18,9 @@ license = [
 
 [permissions]
 files = "Read selected CORE/PSARC files and write a local resource index"
+
+[build]
+paths_exclude_pattern = [
+  "__pycache__/",
+  "*.pyc",
+]

@@ -72,7 +72,12 @@ version declared in `blender_manifest.toml`.
 Open **3D View > Sidebar > KZ2 Tools** for the extension's dedicated menu.
 The sidebar can still launch the extracted CORE file picker. It also provides
 complete level, individual section, and cached entity import directly from
-`data_ps3.psarc`.
+`data_ps3.psarc`. Each sidebar section is collapsible.
+
+Extracted `.core` files can also be imported by dragging them from a file
+manager into the 3D Viewport or Outliner, which opens the import options as a
+dialog. **File > Import > Killzone 2 CORE** accepts several files at once;
+each file is imported into its own collection.
 
 ![KZ2 Tools sidebar with extracted CORE, level, and cached entity import controls](docs/images/Blender_KZ2_Menu.png)
 
@@ -186,6 +191,10 @@ Synthetic tests contain no copyrighted game payload:
 ```powershell
 python -m unittest discover -s .\tests -v
 ```
+
+Blender-side builder tests also use synthetic data. They run under Blender's
+Python or the `bpy` wheel from PyPI (`pip install bpy==5.2.*`, Python 3.13)
+and are skipped otherwise.
 
 Optional private integration tests use the local archive without copying any
 asset into this repository:
