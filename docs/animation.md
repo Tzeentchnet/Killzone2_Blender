@@ -230,6 +230,77 @@ sample_frequency ~= (frame_count - 1) / duration
 Only `flags == 0` is currently sampleable. Other flag values are structurally
 reported but transform decoding fails explicitly.
 
+### Retail interstitial header variants
+
+A full `BCUS98116 01.01` retail audit on 2026-11-02 found a second unsupported
+case that is independent of the EA02 flags:
+
+| Inventory | Count |
+|---|---:|
+| Reflected `SkeletonAnimationResource` objects | 44,104 |
+| Decoded by the current parser | 41,043 |
+| Rejected by the header/first-frame-set equality check | 3,061 (6.9%) |
+| Logical CORE paths containing rejected clips | 42 |
+
+The parser currently requires `header_size` at `0x0C` to equal the first
+frame-set data offset from the DMA table. Every rejected clip instead has:
+
+```text
+header_size == align16(
+    max(
+        dma_table_offset + frame_set_count * 8,
+        info_table_offset + frame_set_count * 4,
+    )
+)
+first_frame_set_offset > header_size
+```
+
+The intervening block is nonzero and always 16-byte aligned. Its observed
+lengths are:
+
+| Bytes between header and first frame set | Clips |
+|---:|---:|
+| 48 | 8 |
+| 80 | 2,018 |
+| 96 | 1,007 |
+| 192 | 26 |
+| 240 | 2 |
+
+These are not flagged or scalar-only clips:
+
+- all 3,061 have wrapper flags `0` and EA02 flags `0`;
+- wrapper version 1 accounts for 787 clips and version 2 for 2,274;
+- all contain transform channels;
+- 2,218 contain no user channels, while 843 contain one or both user-channel
+  groups;
+- joint counts range from 40 to 135, frame counts from 2 to 1,379, and
+  frame-set counts from 2 to 12;
+- 1,448 clips occur in 11 standalone weapon-asset CORE paths and 1,613 occur
+  in 31 optimized single-player level bundles.
+
+As a diagnostic only, changing the in-memory `header_size` field to the first
+frame-set offset, without changing any other byte, allowed all 3,061 clips to
+parse and sample their first and final frames. This isolates the current
+failure to the equality check and suggests that the existing frame-set and
+packing decoders can consume the remainder. It does **not** establish what
+the intervening block means or prove that ignoring it produces equivalent
+animation.
+
+Future support should:
+
+1. preserve the intervening bytes explicitly rather than rewriting
+   `header_size`;
+2. replace the equality check only after validating table bounds, 16-byte
+   alignment, and non-overlap with the first frame set;
+3. identify the block's 16-byte units and correlate them with wrapper
+   version, channel counts, skeleton size, and Sony Edge evaluation metadata;
+4. add synthetic valid and malformed fixtures for every observed block
+   length;
+5. compare sampled transforms with a known-good implementation before
+   creating Blender Actions; and
+6. rerun the full retail audit, requiring all 3,061 original byte streams to
+   parse without weakening existing fail-closed checks.
+
 ## Channel-index tables
 
 Each table contains big-endian `u16` channel indices followed by padding:
@@ -340,6 +411,9 @@ the audit tool but is not applied as Blender root motion.
 - Wrapper versions, flags, and index meanings are retained but not generally
   interpreted.
 - `EA02` flags other than zero are unsupported.
+- The nonzero interstitial block in
+  [retail header variants](#retail-interstitial-header-variants) is preserved
+  only as part of the original EA02 blob and has no assigned semantics.
 - User/scalar channel values are framed but not decoded into scene data.
 - The DMA word, evaluation-buffer size, reserved header ranges, and the last
   four values of the final frame-set size table are not assigned semantics.

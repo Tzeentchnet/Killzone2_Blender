@@ -255,5 +255,7 @@ or omit the positional path after setting `KZ2_PSARC`.
   requires matching metadata when reusing an existing armature.
 - Additive and composite animation semantics have not been proven. Decoded
   transform clips are currently applied as absolute local transforms.
-- Unknown `EA02` flags and unsupported format revisions fail closed rather
-  than creating incomplete or fabricated Actions.
+- Unknown `EA02` flags,
+  [retail interstitial header variants](docs/animation.md#retail-interstitial-header-variants),
+  and unsupported format revisions fail closed rather than creating
+  incomplete or fabricated Actions.

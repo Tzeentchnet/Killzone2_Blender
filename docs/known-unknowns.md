@@ -90,6 +90,9 @@ that are merely framed from interpretations that affect Blender output.
 - Complete `SkeletonAnimationBoneMap` behavior.
 - Animation wrapper version/flags/index meanings.
 - `EA02` flags other than zero.
+- The nonzero 16-byte-aligned block between the declared EA02 header and the
+  first frame-set payload in
+  [retail interstitial header variants](animation.md#retail-interstitial-header-variants).
 - Evaluation-buffer size, DMA words, reserved header fields, and some final
   frame-set size entries.
 - User/scalar channel values and destinations.
@@ -110,6 +113,9 @@ produce the corresponding result:
 - texture pixel formats outside RGBA8, reversed RGBA8, DXT1/3/5, and RGBA16F;
 - cubemap-to-Blender environment conversion;
 - `EA02` transform sampling when flags are nonzero;
+- EA02 clips with the
+  [retail interstitial header variant](animation.md#retail-interstitial-header-variants),
+  which currently fail the strict header/first-frame-set equality check;
 - Blender mapping for scalar/user animation channels;
 - specialized Blender adapters for most direct level metadata.
 
