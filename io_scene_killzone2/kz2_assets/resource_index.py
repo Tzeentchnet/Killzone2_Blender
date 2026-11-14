@@ -12,7 +12,7 @@ from typing import Protocol, Self
 
 from .errors import FormatError
 
-RESOURCE_INDEX_VERSION = 1
+RESOURCE_INDEX_VERSION = 2
 
 
 class ResourceObjectMetadata(Protocol):

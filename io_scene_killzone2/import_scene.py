@@ -19,6 +19,7 @@ from .kz2_assets.edge_animation import (
     EdgeAnimation,
     read_skeleton_animation_bone_map_reference,
 )
+from .kz2_assets.entities import ENTITY_RESOURCE_TYPES
 from .kz2_assets.errors import FormatError
 from .kz2_assets.geometry import (
     blender_uv_pairs,
@@ -29,6 +30,7 @@ from .kz2_assets.geometry import (
 from .kz2_assets.level import EntityPlaceHolder, StaticMeshInstance
 from .kz2_assets.level_catalog import CachedLevel
 from .kz2_assets.model import (
+    AttachmentMover,
     BoneBindings,
     DestructibilityPartState,
     EntityResource,
@@ -154,6 +156,21 @@ class _EntityArmature:
     decoder: CoreDecoder
     record: CoreObject
     skeleton: Skeleton
+
+
+@dataclass(frozen=True, slots=True)
+class _DestructibilityRenderInfo:
+    part_id: int
+    bone_name: str
+    local_matrix: Matrix4
+    state_offset_matrix: Matrix4
+
+
+@dataclass(frozen=True, slots=True)
+class _EntityRenderReference:
+    decoder: CoreDecoder
+    reference: CoreReference
+    destructibility: _DestructibilityRenderInfo | None = None
 
 
 def import_core_file(
@@ -655,11 +672,11 @@ def import_psarc_entity(
             observed=object_index,
         )
     record = core.objects[object_index]
-    if record.type_name != "EntityResource":
+    if record.type_name not in ENTITY_RESOURCE_TYPES:
         raise FormatError(
             "cached entity object type changed; rescan the PSARC",
             source=core.source,
-            expected="EntityResource",
+            expected="an EntityResource-derived type",
             observed=record.type_name,
         )
     decoder = CoreDecoder(core)
@@ -722,9 +739,10 @@ def import_psarc_entity(
         None,
         context=context,
         armatures=entity_armatures,
+        import_child_animations=True,
     )
     if options.import_animations:
-        result.actions = _create_cached_entity_actions(
+        result.actions += _create_cached_entity_actions(
             context,
             placement,
             decoder,
@@ -804,13 +822,17 @@ def _external_resource_ids(decoder: CoreDecoder) -> set[str]:
             add(technique.shader)
             for binding in technique.texture_bindings:
                 add(binding.texture)
-    for _, decoded in decoder.iter_type("EntityResource"):
+    for _, decoded in decoder.iter_type(*ENTITY_RESOURCE_TYPES):
         if not isinstance(decoded, EntityResource):
             continue
         add(decoded.animator)
         add(decoded.mover)
         add(decoded.model)
         add(decoded.destructibility)
+        for reference in decoded.child_entities:
+            add(reference)
+        for reference in decoded.body_variants:
+            add(reference)
     for _, decoded in decoder.iter_type(
         "StaticModelResource",
         "SkinnedModelResource",
@@ -1124,21 +1146,87 @@ def _create_entity_render_objects(
     *,
     context: bpy.types.Context | None = None,
     armatures: dict[tuple[int, int], _EntityArmature] | None = None,
+    active_entities: set[tuple[int, int]] | None = None,
+    import_child_animations: bool = False,
 ) -> int:
+    key = (id(entity.decoder.core), entity.record.index)
+    if active_entities is None:
+        active_entities = set()
+    if key in active_entities:
+        result.warnings.append(
+            f"Entity {entity_label} contains a cyclic child-entity reference"
+        )
+        return 0
+    active_entities.add(key)
+    try:
+        return _create_entity_render_objects_impl(
+            collection,
+            placement,
+            entity,
+            entity_label,
+            source_record,
+            options,
+            result,
+            material_builder,
+            external_resolver,
+            static_templates,
+            skinned_templates,
+            coordinate_basis,
+            context=context,
+            armatures=armatures,
+            active_entities=active_entities,
+            import_child_animations=import_child_animations,
+        )
+    finally:
+        active_entities.remove(key)
+
+
+def _create_entity_render_objects_impl(
+    collection: bpy.types.Collection,
+    placement: bpy.types.Object,
+    entity: ResolvedResource,
+    entity_label: str,
+    source_record: CoreObject,
+    options: ImportOptions,
+    result: ImportResult,
+    material_builder: MaterialBuilder | None,
+    external_resolver: PsarcResourceResolver | None,
+    static_templates: dict[tuple[int, int, int], _MeshTemplate],
+    skinned_templates: dict[
+        tuple[int, int, int],
+        _SkinnedMeshTemplate,
+    ],
+    coordinate_basis: Matrix | None,
+    *,
+    context: bpy.types.Context | None,
+    armatures: dict[tuple[int, int], _EntityArmature] | None,
+    active_entities: set[tuple[int, int]],
+    import_child_animations: bool,
+) -> int:
+    entity_value = entity.value
+    if not isinstance(entity_value, EntityResource):
+        result.warnings.append(
+            f"Entity {entity_label} did not decode as an EntityResource"
+        )
+        return 0
     render_references = _entity_render_references(
         entity,
         external_resolver,
         result,
     )
-    if not render_references:
+    if not render_references and not entity_value.child_entities:
         result.warnings.append(
             f"Entity {entity_label} has no supported render-model reference"
         )
-        return 0
 
     created = 0
     bound_armatures = {} if armatures is None else armatures
-    for resource_decoder, mesh_reference in render_references:
+    pending_destructibility_attachments: list[
+        tuple[bpy.types.Object, _DestructibilityRenderInfo]
+    ] = []
+    for render_reference in render_references:
+        resource_decoder = render_reference.decoder
+        mesh_reference = render_reference.reference
         resolved_mesh = _resolve_reference(
             resource_decoder,
             mesh_reference,
@@ -1191,6 +1279,10 @@ def _create_entity_render_objects(
                     resolved_mesh.decoder.core.source
                 )
                 mesh_object["kz2_skinned_rest_pose"] = True
+                _set_destructibility_properties(
+                    mesh_object,
+                    render_reference.destructibility,
+                )
                 created += 1
             continue
 
@@ -1256,8 +1348,22 @@ def _create_entity_render_objects(
                 mesh_object["kz2_mesh_object_index"] = leaf.record.index
                 mesh_object["kz2_mesh_source"] = leaf.decoder.core.source
                 mesh_object["kz2_wrapper_path"] = list(leaf.wrapper_path)
+                _set_destructibility_properties(
+                    mesh_object,
+                    render_reference.destructibility,
+                )
                 if isinstance(leaf, _SkinnedMeshLeaf):
                     mesh_object["kz2_skinned_rest_pose"] = True
+                elif (
+                    render_reference.destructibility is not None
+                    and render_reference.destructibility.bone_name
+                ):
+                    pending_destructibility_attachments.append(
+                        (
+                            mesh_object,
+                            render_reference.destructibility,
+                        )
+                    )
                 if leaf.lod_distance is not None:
                     mesh_object["kz2_lod_distance"] = leaf.lod_distance
                     mesh_object["kz2_lod_max_distance"] = (
@@ -1275,7 +1381,280 @@ def _create_entity_render_objects(
                         mesh_object.hide_viewport = True
                         mesh_object.hide_render = True
                 created += 1
+    for mesh_object, destructibility in pending_destructibility_attachments:
+        _attach_destructibility_mesh(
+            mesh_object,
+            destructibility,
+            bound_armatures,
+            options,
+            result,
+        )
+    for child_reference in entity_value.child_entities:
+        if child_reference.is_null:
+            continue
+        child = _resolve_reference(
+            entity.decoder,
+            child_reference,
+            external_resolver,
+        )
+        if child is None:
+            result.warnings.append(
+                f"Entity {entity_label} has an unresolved child entity "
+                f"{_reference_label(entity.decoder, child_reference)}"
+            )
+            continue
+        if (
+            child.record.type_name not in ENTITY_RESOURCE_TYPES
+            or not isinstance(child.value, EntityResource)
+        ):
+            result.warnings.append(
+                f"Entity {entity_label} child {child.record.display_id} is "
+                f"{child.record.type_name}, not an EntityResource-derived type"
+            )
+            continue
+        child_key = (id(child.decoder.core), child.record.index)
+        if child_key in active_entities:
+            result.warnings.append(
+                f"Entity {entity_label} contains a cyclic child-entity "
+                f"reference to {child.record.display_id}"
+            )
+            continue
+        child_name = (
+            child.value.prefix.name
+            or f"{child.record.type_name}_{child.record.index:05d}"
+        )
+        child_placement = bpy.data.objects.new(child_name, None)
+        child_placement.empty_display_type = "CUBE"
+        child_placement.empty_display_size = max(0.2, options.global_scale)
+        collection.objects.link(child_placement)
+        _set_source_properties(child_placement, child.record)
+        child_placement["kz2_child_entity"] = True
+        child_placement["kz2_entity_resource_class"] = child.record.type_name
+        child_placement["kz2_entity_resource_name"] = child.value.prefix.name
+        child_placement["kz2_entity_resource_object_id"] = (
+            child.record.display_id
+        )
+        child_placement["kz2_entity_resource_source"] = (
+            child.decoder.core.source
+        )
+        _attach_child_entity(
+            child_placement,
+            placement,
+            child,
+            bound_armatures,
+            options,
+            result,
+            external_resolver,
+        )
+        child_armatures: dict[tuple[int, int], _EntityArmature] = {}
+        created += _create_entity_render_objects(
+            collection,
+            child_placement,
+            child,
+            f"{child.record.display_id} ({child_name})",
+            child.record,
+            options,
+            result,
+            material_builder,
+            external_resolver,
+            static_templates,
+            skinned_templates,
+            coordinate_basis,
+            context=context,
+            armatures=child_armatures,
+            active_entities=active_entities,
+            import_child_animations=import_child_animations,
+        )
+        result.entity_instances += 1
+        if (
+            import_child_animations
+            and context is not None
+            and options.import_animations
+            and external_resolver is not None
+        ):
+            result.actions += _create_cached_entity_actions(
+                context,
+                child_placement,
+                child.decoder,
+                child_armatures,
+                options,
+                result,
+                external_resolver,
+            )
     return created
+
+
+def _attach_child_entity(
+    child_placement: bpy.types.Object,
+    parent_placement: bpy.types.Object,
+    child: ResolvedResource,
+    parent_armatures: dict[tuple[int, int], _EntityArmature],
+    options: ImportOptions,
+    result: ImportResult,
+    external_resolver: PsarcResourceResolver | None,
+) -> None:
+    child_placement.parent = parent_placement
+    child_placement.matrix_local = Matrix.Identity(4)
+    child_value = child.value
+    if not isinstance(child_value, EntityResource):
+        result.warnings.append(
+            f"Child entity {child_placement.name} did not decode as an "
+            "EntityResource"
+        )
+        return
+    mover_resource = _resolve_reference(
+        child.decoder,
+        child_value.mover,
+        external_resolver,
+    )
+    if mover_resource is None:
+        if not child_value.mover.is_null:
+            result.warnings.append(
+                f"Child entity {child_placement.name} has an unresolved mover "
+                f"{_reference_label(child.decoder, child_value.mover)}"
+            )
+        return
+    mover = mover_resource.value
+    if not isinstance(mover, AttachmentMover):
+        result.warnings.append(
+            f"Child entity {child_placement.name} uses unsupported mover "
+            f"{mover_resource.record.type_name}; parented to its owning entity"
+        )
+        return
+
+    matches: list[tuple[_EntityArmature, str | None, Matrix]] = []
+    unresolved_helper_parent: int | None = None
+    for target in parent_armatures.values():
+        joint_world_matrices = _joint_world_matrices(
+            target.skeleton,
+            options.global_scale,
+        )
+        if mover.target_kind == "helper":
+            for helper in target.skeleton.helpers:
+                if helper.name != mover.target_name:
+                    continue
+                if helper.parent_index is None:
+                    parent_bone = None
+                    target_matrix = Matrix.Identity(4)
+                elif helper.parent_index >= len(target.skeleton.joints):
+                    unresolved_helper_parent = helper.parent_index
+                    continue
+                else:
+                    parent_bone = target.skeleton.joints[
+                        helper.parent_index
+                    ].name
+                    target_matrix = joint_world_matrices[
+                        helper.parent_index
+                    ]
+                matches.append(
+                    (
+                        target,
+                        parent_bone,
+                        target_matrix
+                        @ _level_matrix(helper.local_transform, options),
+                    )
+                )
+        else:
+            for joint_index, joint in enumerate(target.skeleton.joints):
+                if joint.name == mover.target_name:
+                    matches.append(
+                        (
+                            target,
+                            joint.name,
+                            joint_world_matrices[joint_index],
+                        )
+                    )
+
+    if len(matches) != 1:
+        if not matches and unresolved_helper_parent is not None:
+            detail = (
+                "uses unsupported non-joint parent index "
+                f"{unresolved_helper_parent}"
+            )
+        else:
+            detail = "was not found" if not matches else "is ambiguous"
+        result.warnings.append(
+            f"Child entity {child_placement.name} attachment "
+            f"{mover.target_kind} {mover.target_name!r} {detail}; parented "
+            "to its owning entity"
+        )
+        return
+
+    target, parent_bone, target_matrix = matches[0]
+    attachment_matrix = (
+        target_matrix
+        @ _level_matrix(mover.local_matrix, options)
+        @ _level_matrix(mover.post_local_matrix, options)
+    )
+    child_placement.parent = target.object
+    if parent_bone is not None:
+        child_placement.parent_type = "BONE"
+        child_placement.parent_bone = parent_bone
+    child_placement.matrix_world = target.object.matrix_world @ attachment_matrix
+    child_placement["kz2_attachment_mover_class"] = (
+        mover_resource.record.type_name
+    )
+    child_placement["kz2_attachment_target_kind"] = mover.target_kind
+    child_placement["kz2_attachment_target_name"] = mover.target_name
+    child_placement["kz2_attachment_parent_bone"] = parent_bone or ""
+    child_placement["kz2_attachment_align_to_world"] = bool(
+        mover.align_to_world
+    )
+    if mover.align_to_world:
+        result.warnings.append(
+            f"Child entity {child_placement.name} requests AlignToWorld; "
+            "the imported attachment preserves its local helper transform"
+        )
+
+
+def _set_destructibility_properties(
+    mesh_object: bpy.types.Object,
+    destructibility: _DestructibilityRenderInfo | None,
+) -> None:
+    if destructibility is None:
+        return
+    mesh_object["kz2_destructibility_part_id"] = destructibility.part_id
+    mesh_object["kz2_destructibility_bone"] = destructibility.bone_name
+
+
+def _attach_destructibility_mesh(
+    mesh_object: bpy.types.Object,
+    destructibility: _DestructibilityRenderInfo,
+    armatures: dict[tuple[int, int], _EntityArmature],
+    options: ImportOptions,
+    result: ImportResult,
+) -> None:
+    matches = [
+        (target, joint_index)
+        for target in armatures.values()
+        for joint_index, joint in enumerate(target.skeleton.joints)
+        if joint.name == destructibility.bone_name
+    ]
+    if len(matches) != 1:
+        detail = "was not found" if not matches else "is ambiguous"
+        result.warnings.append(
+            f"Destructibility part {destructibility.part_id} attachment bone "
+            f"{destructibility.bone_name!r} {detail}; mesh "
+            f"{mesh_object.name} remains parented to its owning entity"
+        )
+        return
+
+    target, joint_index = matches[0]
+    wrapper_matrix = mesh_object.matrix_local.copy()
+    attachment_matrix = (
+        _joint_world_matrices(
+            target.skeleton,
+            options.global_scale,
+        )[joint_index]
+        @ _level_matrix(destructibility.local_matrix, options)
+        @ _level_matrix(destructibility.state_offset_matrix, options)
+        @ wrapper_matrix
+    )
+    mesh_object.parent = target.object
+    mesh_object.parent_type = "BONE"
+    mesh_object.parent_bone = destructibility.bone_name
+    mesh_object.matrix_world = target.object.matrix_world @ attachment_matrix
+    mesh_object["kz2_destructibility_bone_attached"] = True
 
 
 def _resolve_named_entity(
@@ -1329,32 +1708,82 @@ def _entity_render_references(
     entity: ResolvedResource,
     external_resolver: PsarcResourceResolver | None,
     result: ImportResult,
-) -> tuple[tuple[CoreDecoder, CoreReference], ...]:
+) -> tuple[_EntityRenderReference, ...]:
     value = entity.value
     if not isinstance(value, EntityResource):
         return ()
-    references: list[tuple[CoreDecoder, CoreReference]] = []
-    model = _resolve_reference(
-        entity.decoder,
-        value.model,
-        external_resolver,
-    )
+    references: list[_EntityRenderReference] = []
+    try:
+        model = _resolve_reference(
+            entity.decoder,
+            value.model,
+            external_resolver,
+        )
+    except FormatError as exc:
+        result.warnings.append(
+            f"EntityResource {entity.record.display_id} model could not be "
+            f"resolved: {exc}"
+        )
+        model = None
     if model is not None:
         if isinstance(model.value, ModelResource):
             if not model.value.mesh.is_null:
-                references.append((model.decoder, model.value.mesh))
+                references.append(
+                    _EntityRenderReference(
+                        model.decoder,
+                        model.value.mesh,
+                    )
+                )
         else:
             result.warnings.append(
                 f"EntityResource {entity.record.display_id} model has "
                 f"unsupported type {model.record.type_name}"
             )
 
-    destructibility = _resolve_reference(
-        entity.decoder,
-        value.destructibility,
-        external_resolver,
-    )
+    if len(value.body_variants) > 1:
+        result.warnings.append(
+            f"EntityResource {entity.record.display_id} has "
+            f"{len(value.body_variants)} humanoid body variants; imported "
+            "the first variant"
+        )
+    for body_variant in value.body_variants[:1]:
+        part = _resolve_reference(
+            entity.decoder,
+            body_variant,
+            external_resolver,
+        )
+        if part is None or not isinstance(part.value, ModelPart):
+            result.warnings.append(
+                f"EntityResource {entity.record.display_id} humanoid body "
+                "variant is unresolved or unsupported"
+            )
+            continue
+        if not part.value.mesh.is_null:
+            references.append(
+                _EntityRenderReference(
+                    part.decoder,
+                    part.value.mesh,
+                )
+            )
+
+    try:
+        destructibility = _resolve_reference(
+            entity.decoder,
+            value.destructibility,
+            external_resolver,
+        )
+    except FormatError as exc:
+        result.warnings.append(
+            f"EntityResource {entity.record.display_id} destructibility "
+            f"could not be resolved: {exc}"
+        )
+        destructibility = None
     if destructibility is None:
+        return tuple(references)
+    if (
+        not isinstance(destructibility.value, StateBasedDestructibility)
+        and destructibility.record.type_name == "DestructibilityResource"
+    ):
         return tuple(references)
     if not isinstance(destructibility.value, StateBasedDestructibility):
         result.warnings.append(
@@ -1368,7 +1797,22 @@ def _entity_render_references(
             "destructibility layout; damage-state meshes were skipped"
         )
         return tuple(references)
-    for state_reference in destructibility.value.part_states:
+    for (
+        state_reference,
+        enabled,
+        part_id,
+        bone_name,
+        local_matrix,
+    ) in zip(
+        destructibility.value.part_states,
+        destructibility.value.part_enabled,
+        destructibility.value.part_ids,
+        destructibility.value.part_bone_names,
+        destructibility.value.part_local_matrices,
+        strict=True,
+    ):
+        if not enabled:
+            continue
         state = _resolve_reference(
             destructibility.decoder,
             state_reference,
@@ -1387,7 +1831,18 @@ def _entity_render_references(
         if part is None or not isinstance(part.value, ModelPart):
             continue
         if not part.value.mesh.is_null:
-            references.append((part.decoder, part.value.mesh))
+            references.append(
+                _EntityRenderReference(
+                    part.decoder,
+                    part.value.mesh,
+                    _DestructibilityRenderInfo(
+                        part_id=part_id,
+                        bone_name=bone_name,
+                        local_matrix=local_matrix,
+                        state_offset_matrix=state.value.offset_matrix,
+                    ),
+                )
+            )
     return tuple(references)
 
 
@@ -2416,15 +2871,11 @@ def _create_cached_entity_actions(
     if not armatures:
         return 0
 
-    decoders = {id(entity_decoder.core): entity_decoder}
-    for target in armatures.values():
-        decoders.setdefault(id(target.decoder.core), target.decoder)
-
     created = 0
     imported: set[tuple[int, int]] = set()
     user_channel_actions = 0
     skipped_user_channels = 0
-    for decoder in decoders.values():
+    for decoder in (entity_decoder,):
         state_names = animation_state_clip_names(decoder)
         for record in decoder.core.objects:
             if record.type_name != "SkeletonAnimationResource":

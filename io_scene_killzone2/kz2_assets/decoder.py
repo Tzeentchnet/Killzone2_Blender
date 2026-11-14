@@ -13,6 +13,9 @@ from .animation_graph import (
 from .core import CoreFile, CoreObject, CoreReference
 from .edge_animation import parse_skeleton_animation
 from .entities import (
+    ATTACHMENT_MOVER_TYPES,
+    ENTITY_RESOURCE_TYPES,
+    parse_attachment_mover,
     parse_destructibility_part_state,
     parse_entity_resource,
     parse_model_part,
@@ -99,12 +102,23 @@ _PARSERS = {
     "Texture": parse_texture,
     "RenderEffectResource": parse_render_effect,
     "ShaderResource": parse_shader_resource,
-    "EntityResource": parse_entity_resource,
     "StaticModelResource": parse_model_resource,
     "SkinnedModelResource": parse_model_resource,
     "ModelPartResource": parse_model_part,
     "DestructibilityPartStateResource": parse_destructibility_part_state,
     "StateBasedDestructibilityResource": parse_state_based_destructibility,
 }
+_PARSERS.update(
+    {
+        type_name: parse_entity_resource
+        for type_name in ENTITY_RESOURCE_TYPES
+    }
+)
+_PARSERS.update(
+    {
+        type_name: parse_attachment_mover
+        for type_name in ATTACHMENT_MOVER_TYPES
+    }
+)
 
 SUPPORTED_OBJECT_TYPES = frozenset(_PARSERS)

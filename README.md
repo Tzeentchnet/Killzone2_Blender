@@ -36,6 +36,7 @@ explicitly distinguish validated behavior from guesses and unknown fields.
 | Recursive big-endian Lua 5.1 `GameScript` structure | Supported, never executed |
 | Static map placements and parent transforms | Supported |
 | Entity placeholder props and destructible model parts | Supported |
+| Derived entity resources, recursive child models, and animated helper attachments | Supported for the validated retail profile |
 | Persistent PSARC entity catalog and sidebar import | Supported |
 | Campaign/MP map hierarchy and direct PSARC level import | Supported |
 | Complete-map and individual-section collections | Supported |
@@ -141,6 +142,21 @@ When **Animations** is enabled, a cached entity import creates Actions for
 EA02 clips whose `SkeletonAnimationBoneMap` exactly matches one imported
 armature. Actions use the game animation-state name when available and have a
 fake user so inactive clips remain in the `.blend` file.
+
+Child resources are imported recursively. Helper- or bone-attached child
+placements follow the owning armature while child armatures keep their own
+compatible Actions. This includes the left and right gun resources on
+`HGH_Dropship`. Humanoid imports use the first/default body variant, include
+only enabled destructibility parts, and bind parts such as heads to the same
+armature as the body when they share its skeleton. Static keyframed
+destructibility parts with a bone name, including shootable Helghast helmets,
+are bone-parented with their part and state offset matrices so they follow
+animation until the point where the game would detach them.
+
+Action discovery is limited to animation resources in the selected entity's
+own CORE. An externally resolved shared skeleton can still rig the entity, but
+animations from an unrelated CORE that happens to define the same skeleton
+are not imported.
 
 ![Playback of an imported full-body EA02 animation in Blender](docs/images/Blender_KZ2_full_body_animation.gif)
 

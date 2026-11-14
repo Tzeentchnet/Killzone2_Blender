@@ -194,16 +194,20 @@ trailing bytes rather than silently attributed to the final object.
 
 ### Entities and destructibility
 
-- `EntityResource`
+- `EntityResource` and the profile-validated serialized resource subclasses
+- `AttachToHelperMoverResource`
+- `AttachToBoneMoverResource`
+- `AttachPhysicsRagdollToBoneMoverResource`
 - `StaticModelResource`
 - `SkinnedModelResource`
 - `ModelPartResource`
 - `DestructibilityPartStateResource`
 - `StateBasedDestructibilityResource`
 
-An exact type name not in this list remains an `UnknownObject` unless it is a
-registered direct type. This distinction matters: "the CORE parsed" does not
-mean every reflected object payload was semantically decoded.
+An exact type name not in this list or the registered entity-resource profile
+remains an `UnknownObject` unless it is a registered direct type. This
+distinction matters: "the CORE parsed" does not mean every reflected object
+payload was semantically decoded.
 
 ## Resource prefix
 

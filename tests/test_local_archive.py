@@ -24,6 +24,7 @@ from io_scene_killzone2.kz2_assets.level_catalog import (
     scan_level_catalog,
 )
 from io_scene_killzone2.kz2_assets.model import (
+    AttachmentMover,
     BoneBindings,
     DestructibilityPartState,
     EntityResource,
@@ -192,10 +193,37 @@ class LocalArchiveTests(unittest.TestCase):
             source=path,
         )
         decoder = CoreDecoder(core)
+        entity = decoder.decode(45)
         skeleton = decoder.decode(342)
         body_bone_map = decoder.decode(254)
 
+        self.assertIsInstance(entity, EntityResource)
+        self.assertEqual(
+            {225, 226},
+            {
+                reference.local_index
+                for reference in entity.child_entities
+            },
+        )
+        child_attachments = {}
+        for reference in entity.child_entities:
+            child = decoder.decode(reference.local_index)
+            self.assertIsInstance(child, EntityResource)
+            mover = decoder.resolve(child.mover)
+            self.assertIsInstance(mover, AttachmentMover)
+            child_attachments[child.prefix.name] = mover.target_name
+        self.assertEqual(
+            {
+                "HGH_Dropship_Turret_Left": "Turret_Left",
+                "HGH_Dropship_Turret_Right": "Turret_Right",
+            },
+            child_attachments,
+        )
         self.assertIsInstance(skeleton, Skeleton)
+        helpers = {helper.name: helper for helper in skeleton.helpers}
+        self.assertEqual(1, helpers["Turret_Left"].parent_index)
+        self.assertEqual(1, helpers["Turret_Right"].parent_index)
+        self.assertEqual("Body_Bone", skeleton.joints[1].name)
         self.assertIsInstance(
             body_bone_map,
             SkeletonAnimationBoneMap,
@@ -216,6 +244,79 @@ class LocalArchiveTests(unittest.TestCase):
             },
             animation_state_clip_names(decoder),
         )
+
+    def test_commando_derived_entity_contains_head_model(self) -> None:
+        path = (
+            "LocalCachePS3/lumps/"
+            "assets_description.characters.hgh_commando_"
+            "hgh_commando_character.core"
+        )
+        core = CoreFile.from_bytes(
+            self.archive.read_entry(path),
+            source=path,
+        )
+        decoder = CoreDecoder(core)
+
+        entity = decoder.decode(16)
+
+        self.assertEqual("SoldierResource", core.objects[16].type_name)
+        self.assertIsInstance(entity, EntityResource)
+        self.assertEqual("HGH_Commando", entity.prefix.name)
+        self.assertEqual(
+            (189,),
+            tuple(
+                reference.local_index
+                for reference in entity.body_variants
+            ),
+        )
+        destructibility = decoder.resolve(entity.destructibility)
+        self.assertIsInstance(
+            destructibility,
+            StateBasedDestructibility,
+        )
+        self.assertEqual(tuple(range(12)), destructibility.part_ids)
+        self.assertEqual(
+            (
+                True,
+                True,
+                True,
+                False,
+                True,
+                False,
+                True,
+                False,
+                True,
+                False,
+                True,
+                False,
+            ),
+            destructibility.part_enabled,
+        )
+        self.assertEqual("neck", destructibility.part_bone_names[0])
+        self.assertEqual(
+            (1.0, 0.0, 0.0, 0.0),
+            destructibility.part_local_matrices[0][0],
+        )
+        model_parts = {
+            state.model_part.local_index
+            for reference in destructibility.part_states
+            if isinstance(
+                state := decoder.resolve(reference),
+                DestructibilityPartState,
+            )
+        }
+        self.assertIn(191, model_parts)
+        head_model = decoder.decode(191)
+        self.assertIsInstance(head_model, ModelPart)
+        self.assertEqual("HGH_Commando_Head_Model", head_model.prefix.name)
+        self.assertEqual(85, head_model.mesh.local_index)
+        helmet_state = decoder.resolve(destructibility.part_states[0])
+        self.assertIsInstance(helmet_state, DestructibilityPartState)
+        self.assertEqual(
+            (1.0, 0.0, 0.0, 0.0),
+            helmet_state.offset_matrix[0],
+        )
+        self.assertFalse(helmet_state.has_lock_position)
 
     def test_tank_animation_header_preflight(self) -> None:
         path = (

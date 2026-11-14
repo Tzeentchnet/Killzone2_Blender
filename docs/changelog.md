@@ -5,7 +5,74 @@ results.
 
 ## Unreleased
 
-No changes yet.
+### Added
+
+- Recursive import of `EntityResource` child resources, including their
+  render graphs, armatures, and compatible Actions.
+- Bone/helper attachment movers and expanded-skeleton helper records. Child
+  placements now follow the owning armature while retaining their own rigs.
+- Catalog and direct-import support for the validated serialized
+  `EntityResource` subclass profile, including `SoldierResource` and
+  `TurretResource`.
+- RTTI-profiled humanoid body-variant references for `HumanoidResource` and
+  `SoldierResource`.
+
+### Fixed
+
+- Helghan dropship gun resources are now imported and attached to
+  `Turret_Left` and `Turret_Right` instead of remaining hidden references.
+- Humanoid entities now import their first/default body variant when the base
+  model has a null mesh, so the intact body is no longer omitted.
+- Destructibility part IDs and enabled flags are now decoded. Only enabled
+  initial states are imported, preventing disabled blood-sheet fragments from
+  appearing on intact characters.
+- Humanoid head model parts reachable through enabled destructibility states
+  now import with the body and share its armature.
+- Static keyframed destructibility parts now use their RTTI-defined bone name,
+  part-local matrix, and state offset matrix. Shootable Helghast helmets
+  therefore follow the animated neck instead of remaining at the entity
+  origin.
+- Cached-entity Action discovery no longer scans unrelated external COREs
+  merely because they provide a compatible shared skeleton.
+- Base `DestructibilityResource` objects no longer produce an unsupported
+  damage-state warning when they contain no additional render graph.
+
+### Changed
+
+- Entity catalog and SQLite resource-index schema versions were incremented
+  so older caches that omit derived resources are rebuilt.
+- `EntityPlaceHolder.LinkedObjects` remains distinct from child entity
+  resources; direct linked lights are not incorrectly treated as animated
+  children.
+
+### Validation
+
+- The complete Python 3.12 suite passed against the supported retail archive:
+  **89 tests, zero failures, 12 Blender-only skips**.
+- The complete Python 3.13 and `bpy` 5.2.2 suite passed:
+  **89 tests, zero failures, three resource-index-dependent level skips**.
+  Those three campaign, skybox, and multiplayer level imports then passed
+  separately with a freshly built retail resource index.
+- Retail dropship validation imports 19 meshes, three armatures, ten Actions,
+  and two helper-attached turret placements that move with the body rig.
+- Retail commando validation imports the intact body, head, and helmet on one
+  shared 91-bone armature in rest pose, excludes five disabled damage
+  fragments, and imports no unrelated Actions.
+- An embedded retail HGH Commando imports nine compatible Actions. Applying
+  one to the canonical commando confirms that
+  `StaticMeshResource_00018_P00` moves with the `neck` bone across frames 1,
+  16, and 31 while preserving its exact neck-relative transform and
+  0.19541-unit mesh-center offset.
+- Independent HGH Rifle Infantry validation bone-parents all four helmet LOD
+  meshes to its separately decoded `neck` attachment, guarding against a
+  Commando-specific implementation.
+- A retail-wide destructibility audit decoded 4,060 state-based resources and
+  12,406 part-state resources with no decoder failures, including 542
+  bone-attached parts across 129 bone names.
+- A retail-wide body-variant audit decoded all 115 parseable
+  `SoldierResource` records without an ambiguous layout. The one excluded
+  online-character CORE has the pre-existing allocation-framing failure
+  documented under known limitations.
 
 ## 0.5.4 - 2026-11-02
 

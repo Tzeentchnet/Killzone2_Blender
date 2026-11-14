@@ -6,6 +6,7 @@ import unittest
 from io_scene_killzone2.kz2_assets.core import CORE_SIGNATURE, CoreFile
 from io_scene_killzone2.kz2_assets.decoder import CoreDecoder
 from io_scene_killzone2.kz2_assets.model import (
+    AttachmentMover,
     DestructibilityPartState,
     EntityResource,
     ModelPart,
@@ -35,9 +36,39 @@ def local_reference(index: int | None) -> bytes:
 def synthetic_entity_core(
     *,
     destructibility_layout: tuple[int, int] = (90, 86),
+    entity_type: bytes = b"EntityResource",
+    child_indices: tuple[int, ...] = (),
 ) -> bytes:
+    identity_matrix = struct.pack(
+        ">16f",
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+    )
+    part_prefix = (
+        struct.pack(">iBff", 0, 1, 10.0, 0.0)
+        + compact(0)
+        + struct.pack(">H", 5)
+        + struct.pack(">i", 10)
+        + identity_matrix
+        + local_reference(None)
+    )
+    part_prefix += bytes(destructibility_layout[1] - len(part_prefix))
     types = (
-        b"EntityResource",
+        entity_type,
         b"StaticModelResource",
         b"ModelPartResource",
         b"DestructibilityPartStateResource",
@@ -51,25 +82,40 @@ def synthetic_entity_core(
         b"TestPart",
         b"TestState",
         b"TestDestructibility",
-    )
+        b"neck",
+    ) + tuple(f"Unused_{index}".encode() for index in range(251))
+
+    def resource_prefix(index: int) -> bytes:
+        return struct.pack(">H", index) + b"\x01"
+
     payloads = (
         (
-            b"\x00\x01"
+            resource_prefix(0)
             + local_reference(None)
             + b"\x00"
             + local_reference(None)
             + local_reference(1)
             + local_reference(4)
+            + compact(len(child_indices))
+            + b"".join(local_reference(index) for index in child_indices)
             + b"entity-tail"
         ),
-        b"\x01\x01" + local_reference(5) + b"model-tail",
-        b"\x02\x01" + local_reference(5) + b"part-tail",
-        b"\x03\x01" + local_reference(2) + b"state-tail",
+        resource_prefix(1) + local_reference(5) + b"model-tail",
+        resource_prefix(2) + local_reference(5) + b"part-tail",
         (
-            b"\x04\x01"
+            resource_prefix(3)
+            + local_reference(2)
+            + struct.pack(">2f", 0.0, 100.0)
+            + compact(0)
+            + identity_matrix
+            + b"\x00"
+            + b"state-tail"
+        ),
+        (
+            resource_prefix(4)
             + bytes(destructibility_layout[0])
             + compact(1)
-            + bytes(destructibility_layout[1])
+            + part_prefix
             + local_reference(3)
             + bytes(2)
             + bytes(11)
@@ -108,6 +154,65 @@ def synthetic_entity_core(
     return bytes(data)
 
 
+def synthetic_attachment_mover_core() -> bytes:
+    types = (b"AttachToHelperMoverResource", b"String")
+    strings = (b"TestMover", b"Turret_Right")
+    local_matrix = tuple(float(value) for value in range(16))
+    post_local_matrix = (
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+    )
+    payload = (
+        b"\x00\x01"
+        + struct.pack(">16f", *local_matrix)
+        + struct.pack(">16f", *post_local_matrix)
+        + b"\x01"
+        + b"\x01"
+        + b"mover-tail"
+    )
+
+    data = bytearray(CORE_SIGNATURE)
+    data.append(1)
+    data.extend(bytes(16))
+    data.extend(compact(len(types)))
+    for type_name in types:
+        data.extend(compact(len(type_name)))
+        data.extend(type_name)
+    data.extend(compact(1))
+    data.append(0)
+    data.extend(bytes(16))
+    data.extend(struct.pack(">I", len(payload)))
+    data.extend(bytes(12))
+    data.extend(compact(0))
+    data.extend(compact(1))
+    data.append(1)
+    data.extend(compact(len(strings)))
+    for value in strings:
+        data.extend(compact(1))
+        data.append(len(value))
+        data.extend(value)
+    data.extend(compact(0))
+    data.extend(compact(0))
+    data.extend(compact(0))
+    data.extend(compact(0))
+    data.extend(payload)
+    return bytes(data)
+
+
 def definition(
     path: str,
     object_index: int,
@@ -127,7 +232,7 @@ def definition(
 class EntityTests(unittest.TestCase):
     def test_entity_model_and_destructibility_graph(self) -> None:
         core = CoreFile.from_bytes(
-            synthetic_entity_core(),
+            synthetic_entity_core(child_indices=(1,)),
             source="entities.core",
         )
         decoder = CoreDecoder(core)
@@ -137,6 +242,14 @@ class EntityTests(unittest.TestCase):
         self.assertEqual("TestEntity", entity.prefix.name)
         self.assertEqual(1, entity.model.local_index)
         self.assertEqual(4, entity.destructibility.local_index)
+        self.assertEqual(
+            (1,),
+            tuple(
+                reference.local_index
+                for reference in entity.child_entities
+            ),
+        )
+        self.assertEqual((), entity.body_variants)
         self.assertEqual(b"entity-tail", entity.trailing)
 
         model = decoder.decode(1)
@@ -150,6 +263,12 @@ class EntityTests(unittest.TestCase):
         part_state = decoder.decode(3)
         self.assertIsInstance(part_state, DestructibilityPartState)
         self.assertEqual(2, part_state.model_part.local_index)
+        self.assertEqual(
+            (1.0, 0.0, 0.0, 0.0),
+            part_state.offset_matrix[0],
+        )
+        self.assertFalse(part_state.has_lock_position)
+        self.assertEqual(b"state-tail", part_state.trailing)
 
         destructibility = decoder.decode(4)
         self.assertIsInstance(destructibility, StateBasedDestructibility)
@@ -159,6 +278,46 @@ class EntityTests(unittest.TestCase):
         ))
         self.assertEqual(bytes(11), destructibility.trailing)
         self.assertTrue(destructibility.part_states_complete)
+        self.assertEqual((0,), destructibility.part_ids)
+        self.assertEqual((True,), destructibility.part_enabled)
+        self.assertEqual(("neck",), destructibility.part_bone_names)
+        self.assertEqual(
+            (1.0, 0.0, 0.0, 0.0),
+            destructibility.part_local_matrices[0][0],
+        )
+
+    def test_entity_subclass_decodes_base_fields(self) -> None:
+        core = CoreFile.from_bytes(
+            synthetic_entity_core(entity_type=b"SoldierResource"),
+            source="soldier.core",
+        )
+
+        entity = CoreDecoder(core).decode(0)
+
+        self.assertIsInstance(entity, EntityResource)
+        self.assertEqual("TestEntity", entity.prefix.name)
+        self.assertEqual(1, entity.model.local_index)
+        self.assertEqual(4, entity.destructibility.local_index)
+        self.assertEqual((), entity.child_entities)
+        self.assertEqual((), entity.body_variants)
+        self.assertEqual(b"entity-tail", entity.trailing)
+
+    def test_attachment_mover_decodes_target_and_transforms(self) -> None:
+        core = CoreFile.from_bytes(
+            synthetic_attachment_mover_core(),
+            source="mover.core",
+        )
+
+        mover = CoreDecoder(core).decode(0)
+
+        self.assertIsInstance(mover, AttachmentMover)
+        self.assertEqual("TestMover", mover.prefix.name)
+        self.assertEqual("helper", mover.target_kind)
+        self.assertEqual("Turret_Right", mover.target_name)
+        self.assertEqual(1, mover.align_to_world)
+        self.assertEqual((0.0, 1.0, 2.0, 3.0), mover.local_matrix[0])
+        self.assertEqual((0.0, 0.0, 0.0, 1.0), mover.post_local_matrix[3])
+        self.assertEqual(b"mover-tail", mover.trailing)
 
     def test_shifted_destructibility_layout(self) -> None:
         core = CoreFile.from_bytes(

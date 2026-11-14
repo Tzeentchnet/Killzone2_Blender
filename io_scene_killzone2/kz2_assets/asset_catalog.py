@@ -16,6 +16,7 @@ from typing import Any
 
 from .core import CoreFile
 from .decoder import SUPPORTED_OBJECT_TYPES, CoreDecoder
+from .entities import ENTITY_RESOURCE_TYPES
 from .errors import FormatError, Kz2AssetError
 from .level_catalog import (
     CachedLevel,
@@ -27,8 +28,8 @@ from .psarc import Psarc
 from .resolver import read_core_metadata
 from .resource_index import ResourceIndexWriter
 
-ENTITY_ASSET_CACHE_VERSION = 3
-_SUPPORTED_CACHE_VERSIONS = frozenset({2, ENTITY_ASSET_CACHE_VERSION})
+ENTITY_ASSET_CACHE_VERSION = 4
+_SUPPORTED_CACHE_VERSIONS = frozenset({ENTITY_ASSET_CACHE_VERSION})
 ENTITY_CATEGORY_ALL = "ALL"
 ENTITY_CATEGORY_MAPS = "MAPS"
 ENTITY_CATEGORY_CHARACTERS = "CHARACTERS"
@@ -157,6 +158,7 @@ class CachedEntity:
     object_id: str
     has_model: bool
     has_destructibility: bool
+    has_child_entities: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,6 +229,10 @@ class EntityAssetCatalog:
                 has_destructibility=_required_bool(
                     item,
                     "has_destructibility",
+                ),
+                has_child_entities=_required_bool(
+                    item,
+                    "has_child_entities",
                 ),
             )
             for item in _required_records(document, "entities")
@@ -432,7 +438,8 @@ def scan_entity_asset_catalog(
         if resource_writer is not None:
             resource_writer.add_core(path, metadata.objects)
         if not any(
-            obj.type_name == "EntityResource" for obj in metadata.objects
+            obj.type_name in ENTITY_RESOURCE_TYPES
+            for obj in metadata.objects
         ):
             continue
 
@@ -446,7 +453,7 @@ def scan_entity_asset_catalog(
             continue
         decoder = CoreDecoder(core)
         for record in core.objects:
-            if record.type_name != "EntityResource":
+            if record.type_name not in ENTITY_RESOURCE_TYPES:
                 continue
             try:
                 entity = decoder.decode(record)
@@ -462,11 +469,19 @@ def scan_entity_asset_catalog(
                 continue
             has_model = not entity.model.is_null
             has_destructibility = not entity.destructibility.is_null
-            if not has_model and not has_destructibility:
+            has_child_entities = any(
+                not reference.is_null
+                for reference in entity.child_entities
+            )
+            if (
+                not has_model
+                and not has_destructibility
+                and not has_child_entities
+            ):
                 continue
             resource_name = (
                 entity.prefix.name
-                or f"EntityResource_{record.index:05d}"
+                or f"{record.type_name}_{record.index:05d}"
             )
             entities.append(
                 CachedEntity(
@@ -478,6 +493,7 @@ def scan_entity_asset_catalog(
                     object_id=record.display_id,
                     has_model=has_model,
                     has_destructibility=has_destructibility,
+                    has_child_entities=has_child_entities,
                 )
             )
             if resource_writer is not None:

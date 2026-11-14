@@ -153,14 +153,20 @@ The serializer contains:
 7. compact linked-object count and references;
 8. `u32` destructibility state.
 
-The class/name pair identifies a buffered `EntityResource`. Resolution first
-uses exact definitions in the current CORE, then same-level definitions, then
-a unique shared base-lump definition, then a globally unique definition.
-Ambiguity remains an explicit warning; the importer does not choose an
-arbitrary same-name object.
+The class/name pair identifies a buffered `EntityResource` or one of the
+profile-validated resource subclasses, such as `SoldierResource` or
+`TurretResource`. Resolution first uses exact definitions in the current
+CORE, then same-level definitions, then a unique shared base-lump definition,
+then a globally unique definition. Ambiguity remains an explicit warning; the
+importer does not choose an arbitrary same-name object.
 
 The scope and shared-lump preference are **resolution policy**, not serialized
 priority metadata.
+
+`LinkedObjects` are direct scene-object references. Retail samples commonly
+point to `OmniLight` and `SpotLight` records. They are retained as placement
+metadata and are not treated as child entity transforms; direct lights need
+their own Blender adapter.
 
 ## Registered direct serializers
 
@@ -274,9 +280,10 @@ interpretation, wrapper fields, and engine bindings remain out of scope.
 
 ## Buffered entity graph
 
-### Entity and model links
+### Entity, model, and child links
 
-`EntityResource` is decoded as:
+The validated `EntityResource` family is decoded through these shared base
+fields:
 
 1. resource prefix;
 2. animator reference;
@@ -284,7 +291,39 @@ interpretation, wrapper fields, and engine bindings remain out of scope.
 4. mover reference;
 5. model reference;
 6. destructibility reference;
-7. raw trailing bytes.
+7. compact child-entity count and references;
+8. raw subclass/trailing bytes.
+
+Child entities are imported recursively with cycle detection. Each child gets
+its own placement empty, render graph, armature, and compatible Actions.
+This is separate from `EntityPlaceHolder.LinkedObjects`.
+The cached-entity catalog retains resources backed by a model,
+destructibility graph, or non-null child-entity reference, including roots
+whose visible geometry exists only in their children.
+
+The validated attachment mover payload shared by
+`AttachToHelperMoverResource`, `AttachToBoneMoverResource`, and
+`AttachPhysicsRagdollToBoneMoverResource` contains:
+
+1. resource prefix;
+2. local 4x4 matrix;
+3. post-local 4x4 matrix;
+4. `AlignToWorld` `u8`;
+5. helper or bone name;
+6. subclass/trailing bytes.
+
+For a helper attachment, the importer resolves the helper on an owning
+entity armature, bone-parents the child placement to the helper's parent
+joint, and uses this rest transform:
+
+```text
+parent_joint_world * helper_local * mover_local * mover_post_local
+```
+
+The child armature stays below that placement, so it follows the owning
+entity's pose while retaining its own animation channels. `AlignToWorld`
+runtime behavior is not proven; a set flag produces an explicit approximation
+warning rather than being silently ignored.
 
 `StaticModelResource` and `SkinnedModelResource` each contain a resource
 prefix, one mesh reference, and raw trailing bytes.
@@ -292,7 +331,44 @@ prefix, one mesh reference, and raw trailing bytes.
 `ModelPartResource` similarly links to one mesh.
 `DestructibilityPartStateResource` links to one model part. These chains let
 the importer reach intact renderable mesh states without decoding complete
-gameplay behavior.
+gameplay behavior. Humanoid head parts in those states use the same skeleton
+as the body and therefore bind to the same Blender armature.
+
+A destructibility part also provides a bone name and local matrix. Its state
+provides a second offset matrix and a lock-position flag. When an enabled
+state resolves to a static mesh and names exactly one bone on the entity
+armature, Blender bone-parents every imported LOD of that mesh using:
+
+```text
+joint_rest_world * part_local * state_offset * mesh_wrapper
+```
+
+This reproduces the initial keyframed state used by shootable character
+attachments such as Helghast helmets. Skinned destructibility parts continue
+to use their armature modifier. The later gameplay transition that detaches a
+part and enables dynamic physics is not simulated.
+
+### Humanoid body variants
+
+The supported `HumanoidResource` and `SoldierResource` profile stores the
+visible body separately from the base `ModelResource`. The base model's mesh
+reference can legitimately be null; the body then comes from the
+`BodyVariants` array of `ModelPartResource` references.
+
+The RTTI-backed allocation profile gives each `HumanoidBodyVariant` a 28-byte
+allocation unit. The serialized array candidate is accepted only when:
+
+1. its positive count matches an allocation-derived count and is at most 64;
+2. every model reference is non-null and each local reference targets
+   `ModelPartResource`;
+3. all six eye-translation floats per variant are finite and bounded;
+4. the following blood-puddle reference, face flag, facial bone-set string,
+   and facial blend time are structurally valid.
+
+No candidate means no body-variant render reference. More than one candidate
+is rejected as ambiguous instead of guessing. When several actual variants
+are present, Blender currently imports the first/default variant and reports
+that selection in the import warnings.
 
 ### State-based destructibility heuristic
 
@@ -310,6 +386,17 @@ If the object's first allocation list has a positive first field divisible by
 candidate is rejected when its count differs or a local reference does not
 target `DestructibilityPartStateResource`.
 
+The per-part prefix contains the RTTI-defined ID, enabled flag, health,
+entity-damage multiplier, damage-pass-on array, bone name, humanoid hit
+location, local matrix, and optional random-local-matrix reference. The
+importer validates that structure and retains the original bytes while
+exposing the ID, enabled flag, bone name, and local matrix. It also decodes
+the state offset matrix and lock-position flag.
+
+Blender follows the initial configuration by importing only enabled
+part-state model references. Disabled damage fragments, such as blood sheets,
+are retained as decoded metadata but are not added to the visible entity.
+
 Among surviving candidates, the importer prefers:
 
 1. the most non-null part references;
@@ -319,7 +406,8 @@ Among surviving candidates, the importer prefers:
 If none survive, the remaining bytes are preserved and
 `part_states_complete` is false. This strategy is **heuristic**, despite being
 validated on known shifted retail layouts. The 144-byte allocation unit and
-the internal meaning of the header/per-part raw fields have not been proven.
+per-part fields are RTTI-backed; the internal meaning of the resource header
+and some trailing state fields has not been proven.
 
 ## Framing versus Blender support
 
@@ -346,6 +434,10 @@ Currently:
 - Complete gameplay dependency graphs and behaviors are not decoded.
 - Destructibility selection uses the explicit candidate heuristic documented
   above.
+- Humanoid imports currently select the first/default body variant rather
+  than exposing variant selection in the UI.
+- Destructible-part detachment, shot-off transitions, and dynamic physics are
+  not reproduced; Blender imports the initial bone-attached state.
 - Only static render placements and mesh-backed entity placeholders have
   specialized Blender adapters.
 - `GameScript` is structurally parsed but not disassembled or executed.

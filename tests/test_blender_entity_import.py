@@ -18,7 +18,9 @@ except ModuleNotFoundError:
     "requires Blender and KZ2_PSARC",
 )
 class BlenderEntityImportTests(unittest.TestCase):
-    def test_dropship_imports_rig_and_profiled_material(self) -> None:
+    def test_dropship_imports_attached_turrets_and_profiled_material(
+        self,
+    ) -> None:
         from io_scene_killzone2.import_scene import (
             ImportOptions,
             import_psarc_entity,
@@ -42,22 +44,29 @@ class BlenderEntityImportTests(unittest.TestCase):
             ),
         )
 
-        self.assertEqual(17, result.meshes)
-        self.assertEqual(1, result.armatures)
-        self.assertEqual(4, result.actions)
+        self.assertEqual(19, result.meshes)
+        self.assertEqual(3, result.armatures)
+        self.assertEqual(10, result.actions)
+        self.assertEqual(3, result.entity_instances)
         self.assertEqual([], result.warnings)
         armatures = [
             obj for obj in bpy.data.objects if obj.type == "ARMATURE"
         ]
-        self.assertEqual(1, len(armatures))
-        self.assertEqual(43, len(armatures[0].data.bones))
+        self.assertEqual(3, len(armatures))
+        root_armature = next(
+            obj for obj in armatures if len(obj.data.bones) == 43
+        )
+        turret_armatures = [
+            obj for obj in armatures if len(obj.data.bones) == 3
+        ]
+        self.assertEqual(2, len(turret_armatures))
         rigged_meshes = [
             obj
             for obj in bpy.data.objects
             if obj.type == "MESH"
             and any(
                 modifier.type == "ARMATURE"
-                and modifier.object == armatures[0]
+                and modifier.object == root_armature
                 for modifier in obj.modifiers
             )
         ]
@@ -65,10 +74,47 @@ class BlenderEntityImportTests(unittest.TestCase):
         self.assertTrue(
             all(len(obj.vertex_groups) == 43 for obj in rigged_meshes)
         )
+        turret_placements = [
+            obj
+            for obj in bpy.data.objects
+            if obj.get("kz2_child_entity")
+        ]
+        self.assertEqual(2, len(turret_placements))
+        self.assertEqual(
+            {"Turret_Left", "Turret_Right"},
+            {
+                obj["kz2_attachment_target_name"]
+                for obj in turret_placements
+            },
+        )
+        self.assertTrue(
+            all(obj.parent == root_armature for obj in turret_placements)
+        )
+        self.assertTrue(
+            all(obj.parent_type == "BONE" for obj in turret_placements)
+        )
+        self.assertTrue(
+            all(
+                obj.parent_bone == "Body_Bone"
+                for obj in turret_placements
+            )
+        )
+        self.assertTrue(
+            all(
+                obj["kz2_attachment_target_kind"] == "helper"
+                for obj in turret_placements
+            )
+        )
+        self.assertTrue(
+            all(
+                armature.parent in turret_placements
+                for armature in turret_armatures
+            )
+        )
         actions = [
             action
             for action in bpy.data.actions
-            if action.get("kz2_cached_entity")
+            if action.get("kz2_entity_name") == "HGH_Dropship"
         ]
         self.assertEqual(
             {
@@ -106,32 +152,32 @@ class BlenderEntityImportTests(unittest.TestCase):
             )
         self.assertTrue(
             all(
-                action["kz2_target_armature"] == armatures[0].name
+                action["kz2_target_armature"] == root_armature.name
                 for action in actions
             )
         )
         self.assertTrue(all(action.layers for action in actions))
         self.assertEqual(
             "HGH_Dropship - Fly Away",
-            armatures[0].animation_data.action.name,
+            root_armature.animation_data.action.name,
         )
-        self.assertEqual(armatures[0], bpy.context.active_object)
-        self.assertTrue(armatures[0].select_get())
+        self.assertEqual(root_armature, bpy.context.active_object)
+        self.assertTrue(root_armature.select_get())
         self.assertEqual(1, bpy.context.scene.frame_current)
         hover = bpy.data.actions["HGH_Dropship - Hover"]
-        armatures[0].animation_data.action = hover
-        armatures[0].animation_data.action_slot = hover.slots[0]
+        root_armature.animation_data.action = hover
+        root_armature.animation_data.action_slot = hover.slots[0]
         bpy.context.scene.frame_set(round(hover.frame_range[0]))
         start_pose = tuple(
             value
-            for bone in armatures[0].pose.bones
+            for bone in root_armature.pose.bones
             for row in bone.matrix_basis
             for value in row
         )
         bpy.context.scene.frame_set(round(hover.frame_range[1]))
         end_pose = tuple(
             value
-            for bone in armatures[0].pose.bones
+            for bone in root_armature.pose.bones
             for row in bone.matrix_basis
             for value in row
         )
@@ -141,6 +187,36 @@ class BlenderEntityImportTests(unittest.TestCase):
                 for start, end in zip(start_pose, end_pose, strict=True)
             )
         )
+        turret_moved = False
+        for action in actions:
+            root_armature.animation_data.action = action
+            root_armature.animation_data.action_slot = action.slots[0]
+            bpy.context.scene.frame_set(round(action.frame_range[0]))
+            start_transforms = tuple(
+                tuple(value for row in obj.matrix_world for value in row)
+                for obj in turret_placements
+            )
+            bpy.context.scene.frame_set(round(action.frame_range[1]))
+            end_transforms = tuple(
+                tuple(value for row in obj.matrix_world for value in row)
+                for obj in turret_placements
+            )
+            turret_moved = any(
+                abs(start - end) > 1e-5
+                for start_matrix, end_matrix in zip(
+                    start_transforms,
+                    end_transforms,
+                    strict=True,
+                )
+                for start, end in zip(
+                    start_matrix,
+                    end_matrix,
+                    strict=True,
+                )
+            )
+            if turret_moved:
+                break
+        self.assertTrue(turret_moved)
 
         material = bpy.data.materials["KZ2_050b36ec20ad_T00"]
         self.assertEqual(
@@ -219,6 +295,233 @@ class BlenderEntityImportTests(unittest.TestCase):
             {action["kz2_source_object"] for action in actions},
         )
         self.assertEqual("Skeleton_8972", bpy.context.active_object.name)
+
+    def test_z_commando_head_uses_body_armature(self) -> None:
+        from io_scene_killzone2.import_scene import (
+            ImportOptions,
+            import_psarc_entity,
+        )
+
+        archive_path = str(Path(os.environ["KZ2_PSARC"]).resolve())
+        core_path = (
+            "LocalCachePS3/lumps/"
+            "assets_description.characters.hgh_commando_"
+            "hgh_commando_character.core"
+        )
+        existing_objects = set(bpy.data.objects)
+
+        result = import_psarc_entity(
+            bpy.context,
+            archive_path,
+            core_path,
+            16,
+            ImportOptions(
+                source_psarc=archive_path,
+                import_materials=False,
+                import_animations=True,
+            ),
+        )
+
+        imported_objects = [
+            obj for obj in bpy.data.objects if obj not in existing_objects
+        ]
+        armatures = [
+            obj for obj in imported_objects if obj.type == "ARMATURE"
+        ]
+        self.assertEqual(1, result.armatures)
+        self.assertEqual(1, len(armatures))
+        self.assertEqual(91, len(armatures[0].data.bones))
+        self.assertEqual(0, result.actions)
+        self.assertTrue(
+            armatures[0].animation_data is None
+            or armatures[0].animation_data.action is None
+        )
+        head_mesh_indices = {216, 222, 225, 230}
+        head_meshes = [
+            obj
+            for obj in imported_objects
+            if obj.type == "MESH"
+            and obj.get("kz2_mesh_object_index") in head_mesh_indices
+        ]
+        self.assertEqual(head_mesh_indices, {
+            obj["kz2_mesh_object_index"] for obj in head_meshes
+        })
+        self.assertTrue(
+            all(
+                any(
+                    modifier.type == "ARMATURE"
+                    and modifier.object == armatures[0]
+                    for modifier in obj.modifiers
+                )
+                for obj in head_meshes
+            )
+        )
+        body_meshes = [
+            obj
+            for obj in imported_objects
+            if obj.type == "MESH"
+            and obj.get("kz2_mesh_object_index") not in head_mesh_indices
+            and any(
+                modifier.type == "ARMATURE"
+                and modifier.object == armatures[0]
+                for modifier in obj.modifiers
+            )
+        ]
+        self.assertTrue(body_meshes)
+        self.assertIn(
+            220,
+            {obj["kz2_mesh_object_index"] for obj in body_meshes},
+        )
+        helmet = next(
+            obj
+            for obj in imported_objects
+            if obj.type == "MESH"
+            and obj.get("kz2_mesh_object_index") == 18
+            and not obj.hide_viewport
+        )
+        self.assertIs(armatures[0], helmet.parent)
+        self.assertEqual("BONE", helmet.parent_type)
+        self.assertEqual("neck", helmet.parent_bone)
+        self.assertEqual(0, helmet["kz2_destructibility_part_id"])
+        self.assertTrue(helmet["kz2_destructibility_bone_attached"])
+        self.assertEqual(1, len(result.warnings))
+        self.assertIn(
+            "model could not be resolved",
+            result.warnings[0],
+        )
+
+    def test_y_animated_commando_helmet_follows_neck(self) -> None:
+        from io_scene_killzone2.import_scene import (
+            ImportOptions,
+            import_psarc_entity,
+        )
+
+        archive_path = str(Path(os.environ["KZ2_PSARC"]).resolve())
+        core_path = (
+            "LocalCachePS3/lumps/"
+            "levels.single_player.tharsis_refinery.section_train."
+            "assets_optimized_traingp_trainhi_hghtanktrtrain_"
+            "hghcommando_hghsupporttrooper.core"
+        )
+        existing_objects = set(bpy.data.objects)
+
+        result = import_psarc_entity(
+            bpy.context,
+            archive_path,
+            core_path,
+            132,
+            ImportOptions(
+                source_psarc=archive_path,
+                import_materials=False,
+                import_animations=True,
+            ),
+        )
+
+        imported_objects = [
+            obj for obj in bpy.data.objects if obj not in existing_objects
+        ]
+        armature = next(
+            obj for obj in imported_objects if obj.type == "ARMATURE"
+        )
+        helmet = next(
+            obj
+            for obj in imported_objects
+            if obj.type == "MESH"
+            and obj.get("kz2_mesh_object_index") == 323
+            and not obj.hide_viewport
+        )
+        action = next(
+            action
+            for action in bpy.data.actions
+            if action.get("kz2_entity_name") == "HGH_Commando"
+            and action.get("kz2_source_object") == 8897
+        )
+
+        self.assertEqual(9, result.actions)
+        self.assertIs(armature, helmet.parent)
+        self.assertEqual("BONE", helmet.parent_type)
+        self.assertEqual("neck", helmet.parent_bone)
+        armature.animation_data.action = action
+        neck = armature.pose.bones["neck"]
+        relative_matrices = []
+        world_positions = []
+        for frame in (1, 16, 31):
+            bpy.context.scene.frame_set(frame)
+            neck_world = armature.matrix_world @ neck.matrix
+            relative_matrices.append(
+                neck_world.inverted() @ helmet.matrix_world
+            )
+            world_positions.append(helmet.matrix_world.translation.copy())
+
+        self.assertGreater(
+            (world_positions[1] - world_positions[0]).length,
+            0.5,
+        )
+        for matrix in relative_matrices[1:]:
+            for row, expected_row in zip(
+                matrix,
+                relative_matrices[0],
+                strict=True,
+            ):
+                for value, expected in zip(
+                    row,
+                    expected_row,
+                    strict=True,
+                ):
+                    self.assertAlmostEqual(expected, value, places=5)
+
+    def test_x_rifle_infantry_helmet_uses_declared_bone(self) -> None:
+        from io_scene_killzone2.import_scene import (
+            ImportOptions,
+            import_psarc_entity,
+        )
+
+        archive_path = str(Path(os.environ["KZ2_PSARC"]).resolve())
+        core_path = (
+            "LocalCachePS3/lumps/"
+            "assets_description.characters.hgh_rifle_infantry_"
+            "hgh_rifle_infantry_character.core"
+        )
+        existing_objects = set(bpy.data.objects)
+
+        import_psarc_entity(
+            bpy.context,
+            archive_path,
+            core_path,
+            15,
+            ImportOptions(
+                source_psarc=archive_path,
+                import_materials=False,
+                import_animations=False,
+            ),
+        )
+
+        imported_objects = [
+            obj for obj in bpy.data.objects if obj not in existing_objects
+        ]
+        armature = next(
+            obj for obj in imported_objects if obj.type == "ARMATURE"
+        )
+        attached = [
+            obj
+            for obj in imported_objects
+            if obj.type == "MESH"
+            and obj.get("kz2_destructibility_bone_attached")
+        ]
+
+        self.assertEqual(
+            {16, 17, 18, 19},
+            {obj["kz2_mesh_object_index"] for obj in attached},
+        )
+        self.assertTrue(
+            all(
+                obj.parent == armature
+                and obj.parent_type == "BONE"
+                and obj.parent_bone == "neck"
+                and obj["kz2_destructibility_part_id"] == 0
+                for obj in attached
+            )
+        )
 
 
 if __name__ == "__main__":

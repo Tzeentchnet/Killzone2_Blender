@@ -46,7 +46,7 @@ def external_reference(value: bytes) -> bytes:
 
 
 def synthetic_entity_core() -> bytes:
-    types = (b"EntityResource", b"String")
+    types = (b"SoldierResource", b"String")
     resource_name = b"CachedEntity"
     payload = (
         b"\x00\x01"
@@ -55,6 +55,8 @@ def synthetic_entity_core() -> bytes:
         + b"\x00\x00"
         + external_reference(b"model-id")
         + b"\x00\x00"
+        + compact(1)
+        + b"\x00\x01"
     )
 
     data = bytearray(CORE_SIGNATURE)
@@ -162,8 +164,10 @@ class EntityAssetCatalogTests(unittest.TestCase):
             self.assertEqual("CachedEntity", entity.resource_name)
             self.assertEqual(logical_path, entity.path)
             self.assertEqual(0, entity.object_index)
+            self.assertEqual("SoldierResource", entity.resource_type)
             self.assertTrue(entity.has_model)
             self.assertFalse(entity.has_destructibility)
+            self.assertTrue(entity.has_child_entities)
             self.assertEqual((), catalog.issues)
             self.assertTrue(catalog.matches_source(path))
             self.assertEqual(
@@ -179,9 +183,9 @@ class EntityAssetCatalogTests(unittest.TestCase):
             definitions = resource_index.definitions({entity.object_id})
             self.assertEqual(1, len(definitions))
             self.assertEqual(logical_path, definitions[0].path)
-            self.assertEqual("EntityResource", definitions[0].type_name)
+            self.assertEqual("SoldierResource", definitions[0].type_name)
             named = resource_index.named_definitions(
-                {("EntityResource", "CachedEntity")}
+                {("SoldierResource", "CachedEntity")}
             )
             self.assertEqual(1, len(named))
             self.assertEqual("CachedEntity", named[0].resource_name)
@@ -192,18 +196,18 @@ class EntityAssetCatalogTests(unittest.TestCase):
             )
             resolved = resolver.resolve(
                 entity.object_id,
-                expected_type="EntityResource",
+                expected_type="SoldierResource",
             )
             self.assertIsNotNone(resolved)
             self.assertIsInstance(resolved.value, EntityResource)
             named_resolver = PsarcResourceResolver(
                 path,
                 set(),
-                requested_names={("EntityResource", "CachedEntity")},
+                requested_names={("SoldierResource", "CachedEntity")},
                 resource_index_path=index_path,
             )
             named_resolved = named_resolver.resolve_named(
-                "EntityResource",
+                "SoldierResource",
                 "CachedEntity",
             )
             self.assertIsNotNone(named_resolved)
@@ -219,7 +223,7 @@ class EntityAssetCatalogTests(unittest.TestCase):
         ):
             EntityAssetCatalog.from_json('{"cache_version":999}')
 
-    def test_round_trips_level_hierarchy_and_loads_v2_cache(self) -> None:
+    def test_round_trips_level_hierarchy_and_rejects_v2_cache(self) -> None:
         catalog = EntityAssetCatalog(
             source_path=r"C:\retail\data_ps3.psarc",
             source_size=123,
@@ -261,9 +265,11 @@ class EntityAssetCatalogTests(unittest.TestCase):
         version_two = json.loads(catalog.to_json())
         version_two["cache_version"] = 2
         version_two.pop("levels")
-        migrated = EntityAssetCatalog.from_json(json.dumps(version_two))
-        self.assertEqual((), migrated.levels)
-        self.assertEqual(catalog.source_path, migrated.source_path)
+        with self.assertRaisesRegex(
+            FormatError,
+            "cache version is unsupported",
+        ):
+            EntityAssetCatalog.from_json(json.dumps(version_two))
 
     def test_categorizes_and_filters_cached_entities(self) -> None:
         def entity(name: str, path: str) -> CachedEntity:

@@ -79,13 +79,15 @@ that are merely framed from interpretations that affect Blender output.
 - `GameScript` wrapper scalars and engine binding behavior.
 - The 90/91/103-byte destructibility headers, 86/87-byte per-part prefixes,
   two-byte suffixes, and the inferred 144-byte allocation unit.
+- `AlignToWorld` behavior for attachment movers.
 - Complete gameplay dependency and destructibility state behavior.
 
 ### Skeletons and animation
 
 - Four of six `ES00` offset targets.
-- Expanded skeleton pre-joint tables, auxiliary records, unknown arrays, and
-  12-byte joint tails.
+- Expanded skeleton pre-joint tables, unknown arrays, 12-byte joint tails,
+  the final two helper-record words, and out-of-joint-range helper parent
+  indices used by some vehicle skeletons.
 - Skeleton wrapper arrays and IK units/space.
 - Complete `SkeletonAnimationBoneMap` behavior.
 - Animation wrapper version/flags/index meanings.

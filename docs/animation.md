@@ -103,12 +103,29 @@ first 64 bytes are only partially understood:
 From the block origin, the parser:
 
 1. aligns to 64 bytes and skips 24 unknown bytes per joint;
-2. if present, aligns to 16 bytes and skips 80 bytes per auxiliary record;
+2. if present, aligns to 16 bytes and reads 80-byte helper records;
 3. aligns to 16 bytes and reads expanded joints;
 4. aligns to four bytes and reads one unknown `u32` per joint;
 5. aligns again and reads `2 * joint_count + secondary_count` unknown `u32`
    values;
 6. reads the UTF-8 NUL-terminated name chunk.
+
+Each helper record contains:
+
+```text
+f32 local_matrix[4][4]
+u32 name_offset
+u32 parent_joint_index
+u32 unknown[2]
+```
+
+For ordinary joint-parented helpers, the matrix is local to the indexed
+expanded joint. `0xFFFFFFFF` represents no parent. Some retail vehicle
+skeletons store values outside the local joint range for helpers that appear
+to use another node namespace; those values are retained but are not used for
+Blender bone attachment. Helper names share the expanded skeleton's string
+chunk and must be unique. Retail helper tails commonly contain `DEADBEEF` and
+`DEADC0DE`, but both words are retained rather than assigned semantics.
 
 Each expanded joint contains:
 
@@ -122,8 +139,10 @@ u32 parent_name_offset
 
 Names must be unique, and every nonempty parent name must resolve. When
 present, `ES00` and expanded joint counts must agree. The expanded block
-provides named rest transforms for armature construction; the original roles
-of the skipped tables and joint tail remain unknown.
+provides named rest transforms for armature construction. Helper transforms
+provide attachment points for child entities such as the Helghan dropship
+turrets. The original roles of the 24-byte pre-joint table, unknown arrays,
+joint tail, and helper tail words remain unknown.
 
 ## Animation graph resources
 

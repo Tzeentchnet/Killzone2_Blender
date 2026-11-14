@@ -82,6 +82,19 @@ class EntityResource:
     mover: CoreReference
     model: CoreReference
     destructibility: CoreReference
+    child_entities: tuple[CoreReference, ...]
+    body_variants: tuple[CoreReference, ...]
+    trailing: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class AttachmentMover:
+    prefix: ResourcePrefix
+    local_matrix: Matrix4
+    post_local_matrix: Matrix4
+    align_to_world: int
+    target_kind: str
+    target_name: str
     trailing: bytes
 
 
@@ -103,6 +116,9 @@ class ModelPart:
 class DestructibilityPartState:
     prefix: ResourcePrefix
     model_part: CoreReference
+    header: bytes
+    offset_matrix: Matrix4
+    has_lock_position: bool
     trailing: bytes
 
 
@@ -111,6 +127,10 @@ class StateBasedDestructibility:
     prefix: ResourcePrefix
     header: bytes
     part_states: tuple[CoreReference, ...]
+    part_ids: tuple[int, ...]
+    part_enabled: tuple[bool, ...]
+    part_bone_names: tuple[str, ...]
+    part_local_matrices: tuple[Matrix4, ...]
     part_fields: tuple[tuple[bytes, bytes], ...]
     trailing: bytes
     part_states_complete: bool
@@ -422,6 +442,14 @@ class Joint:
 
 
 @dataclass(frozen=True, slots=True)
+class SkeletonHelper:
+    name: str
+    parent_index: int | None
+    local_transform: Matrix4
+    unknown: tuple[int, int]
+
+
+@dataclass(frozen=True, slots=True)
 class Skeleton:
     prefix: ResourcePrefix
     bone_sets: tuple[str, ...]
@@ -433,6 +461,7 @@ class Skeleton:
     edge_header: EdgeSkeletonHeader
     edge_joints: tuple[EdgeJoint, ...]
     joints: tuple[Joint, ...]
+    helpers: tuple[SkeletonHelper, ...]
     auxiliary_count: int
     secondary_count: int
     unknown_arrays: tuple[tuple[int, ...], tuple[int, ...]]

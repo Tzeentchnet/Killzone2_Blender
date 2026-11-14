@@ -7,7 +7,15 @@ from typing import TYPE_CHECKING
 
 from .binary import BinaryReader
 from .geometry import read_resource_prefix
-from .model import EdgeJoint, EdgeSkeletonHeader, IkControl, Joint, Skeleton
+from .model import (
+    EdgeJoint,
+    EdgeSkeletonHeader,
+    IkControl,
+    Joint,
+    Matrix4,
+    Skeleton,
+    SkeletonHelper,
+)
 
 if TYPE_CHECKING:
     from .core import CoreObject
@@ -72,7 +80,9 @@ def parse_skeleton(
     reader.skip(24 * joint_count)
     if auxiliary_count:
         reader.align(16, origin=block_start)
-        reader.skip(80 * auxiliary_count)
+    raw_helpers = tuple(
+        _read_skeleton_helper(reader) for _ in range(auxiliary_count)
+    )
 
     reader.align(16, origin=block_start)
     raw_joints = []
@@ -94,6 +104,20 @@ def parse_skeleton(
     string_chunk_offset = reader.position
     string_chunk = reader.read(string_chunk_length)
 
+    helpers = tuple(
+        SkeletonHelper(
+            name=_read_chunk_string(
+                string_chunk,
+                name_offset,
+                reader,
+                string_chunk_offset,
+            ),
+            parent_index=parent_index,
+            local_transform=local_transform,
+            unknown=unknown,
+        )
+        for local_transform, name_offset, parent_index, unknown in raw_helpers
+    )
     joints = tuple(
         Joint(
             name=_read_chunk_string(
@@ -115,6 +139,7 @@ def parse_skeleton(
         for rotation, translation, name_offset, parent_offset, unknown in raw_joints
     )
     _validate_hierarchy(joints, reader)
+    _validate_helpers(helpers, reader)
     if edge_header.joint_lookup_count not in (0, len(joints)):
         reader.fail(
             "ES00 and expanded skeleton joint counts differ",
@@ -139,9 +164,30 @@ def parse_skeleton(
         edge_header=edge_header,
         edge_joints=edge_joints,
         joints=joints,
+        helpers=helpers,
         auxiliary_count=auxiliary_count,
         secondary_count=secondary_count,
         unknown_arrays=(unknown_array_1, unknown_array_2),
+    )
+
+
+def _read_skeleton_helper(
+    reader: BinaryReader,
+) -> tuple[Matrix4, int, int | None, tuple[int, int]]:
+    matrix: Matrix4 = (
+        (reader.f32(), reader.f32(), reader.f32(), reader.f32()),
+        (reader.f32(), reader.f32(), reader.f32(), reader.f32()),
+        (reader.f32(), reader.f32(), reader.f32(), reader.f32()),
+        (reader.f32(), reader.f32(), reader.f32(), reader.f32()),
+    )
+    name_offset = reader.u32()
+    parent_index = reader.u32()
+    unknown = (reader.u32(), reader.u32())
+    return (
+        matrix,
+        name_offset,
+        None if parent_index == 0xFFFFFFFF else parent_index,
+        unknown,
     )
 
 
@@ -380,4 +426,25 @@ def _validate_hierarchy(joints: tuple[Joint, ...], reader: BinaryReader) -> None
                 "skeleton parent name is unresolved",
                 expected="a decoded joint name",
                 observed=joint.parent_name,
+            )
+
+
+def _validate_helpers(
+    helpers: tuple[SkeletonHelper, ...],
+    reader: BinaryReader,
+) -> None:
+    names = {helper.name for helper in helpers}
+    if len(names) != len(helpers):
+        reader.fail("expanded skeleton contains duplicate helper names")
+    for helper in helpers:
+        if not helper.name:
+            reader.fail("expanded skeleton contains an unnamed helper")
+        if not all(
+            math.isfinite(value)
+            for row in helper.local_transform
+            for value in row
+        ):
+            reader.fail(
+                "expanded skeleton helper transform is not finite",
+                observed=helper.name,
             )
