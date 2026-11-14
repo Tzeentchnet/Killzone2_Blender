@@ -12,13 +12,18 @@ from typing import Protocol, Self
 
 from .errors import FormatError
 
-RESOURCE_INDEX_VERSION = 2
+RESOURCE_INDEX_VERSION = 3
 
 
 class ResourceObjectMetadata(Protocol):
-    index: int
-    type_name: str
-    opaque_id: bytes
+    @property
+    def index(self) -> int: ...
+
+    @property
+    def type_name(self) -> str: ...
+
+    @property
+    def opaque_id(self) -> bytes: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +43,7 @@ class ResourceIndexWriter:
         source_path: str | Path,
         source_size: int,
         source_mtime_ns: int,
+        source_fingerprint: str,
         supported_types: frozenset[str],
     ) -> None:
         self.path = Path(path).expanduser().resolve()
@@ -48,6 +54,7 @@ class ResourceIndexWriter:
         self._source_path = str(Path(source_path).expanduser().resolve())
         self._source_size = source_size
         self._source_mtime_ns = source_mtime_ns
+        self._source_fingerprint = source_fingerprint
         self._connection: sqlite3.Connection | None = None
         type_names = tuple(sorted(supported_types))
         try:
@@ -202,6 +209,7 @@ class ResourceIndexWriter:
                     ("source_path", self._source_path),
                     ("source_size", str(self._source_size)),
                     ("source_mtime_ns", str(self._source_mtime_ns)),
+                    ("source_fingerprint", self._source_fingerprint),
                 ),
             )
             connection.commit()
@@ -236,9 +244,7 @@ class ResourceIndex:
         self,
         path: str | Path,
         *,
-        source_path: str | Path,
-        source_size: int,
-        source_mtime_ns: int,
+        source_fingerprint: str,
     ) -> None:
         self.path = Path(path).expanduser().resolve()
         if not self.path.is_file():
@@ -257,13 +263,9 @@ class ResourceIndex:
                 source=str(self.path),
                 observed=str(exc),
             ) from exc
-        expected_path = str(Path(source_path).expanduser().resolve())
         if (
             metadata.get("version") != str(RESOURCE_INDEX_VERSION)
-            or os.path.normcase(metadata.get("source_path", ""))
-            != os.path.normcase(expected_path)
-            or metadata.get("source_size") != str(source_size)
-            or metadata.get("source_mtime_ns") != str(source_mtime_ns)
+            or metadata.get("source_fingerprint") != source_fingerprint
         ):
             raise FormatError(
                 "PSARC resource index is stale; rescan importable entities",

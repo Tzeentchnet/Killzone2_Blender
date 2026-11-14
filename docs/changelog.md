@@ -3,7 +3,190 @@
 This file records user-visible extension changes and significant validation
 results.
 
-## Unreleased
+## 0.5.12 - 2026-11-14
+
+### Added
+
+- Fourteen exact HGH/ISA tank shader profiles now connect proven base
+  tangent-space normal maps and packed material channels to Blender's
+  Principled normal, roughness, and specular inputs.
+- Tank track profiles multiply the source `DiffuseUV` base color by the
+  source `UV0` secondary color layer, matching the compiled fragment
+  programs.
+- Proven detail-normal samplers are labeled explicitly and retained as
+  unconnected non-color nodes. Their vehicle-specific composition remains
+  intentionally deferred rather than approximated with a generic blend.
+
+### Research
+
+- RSX fragment-program disassembly established the tank packed-material
+  layouts: HGH profiles use `G * 49` or `R * 49`, ISA body profiles use
+  `G * 39.1904`, ISA tracks use `R * 39.1904`, and compact ISA materials use
+  `R * 49`; all use blue for specular intensity.
+- The primary HGH tank family uses `inSampler3` for its base normal and
+  `inSampler4` for its detail normal. The primary ISA tank family uses
+  `inSampler2` and `inSampler3` respectively.
+
+## 0.5.11 - 2026-11-14
+
+### Fixed
+
+- Explicit destructibility bone attachments are now matched
+  case-insensitively while preserving both source and resolved bone names.
+  The ISA tank's 16 source `Body` parts now follow the actual `body` bone and
+  retain their part/state placement instead of remaining at the entity origin.
+- Imported destructibility meshes now record their source state and model-part
+  names, and cached armatures record their owning entity.
+
+### Research
+
+- Retail state names identify part-99 mesh `10317` as
+  `ISA_Tank_M4_Rocket_FakeShadow_Cube`, not collision geometry. The HGH
+  tank's matching mesh `10292` is likewise named
+  `HGH_Light_Tank_FakeShadow_Cube`; the preference and metadata terminology
+  have been corrected accordingly.
+- ISA meshes `10301` and `10303` belong to `LeftTrackInitialState` and
+  `RightTrackInitialState`. `_P00` and `_P01` are material primitives within
+  those initial-state meshes, not damage-state selectors.
+- `Skeleton_11068` is the ISA tank's combined 143-joint tank/occupant rig and
+  receives 36 ranged Actions. `Skeleton_90` belongs to the mounted-LMG child
+  and receives 18 ranged Actions.
+
+## 0.5.10 - 2026-11-14
+
+### Added
+
+- **Import Fake Shadow Meshes** is now an add-on preference and defaults to
+  disabled. The filter recognizes the retail low-poly skinned shadow-volume
+  convention shared by the HGH tank, HGH AAPC, ISA buggy, and ISA tank;
+  enabling the preference restores those meshes and marks them with
+  `kz2_fake_shadow_mesh`.
+
+### Fixed
+
+- Unnamed rigid destructibility pieces now bind to the closest rest joint that
+  is demonstrably weighted by a sibling skinned mesh. The tank's
+  `StaticMeshResource_00613_P00` therefore follows
+  `wheel5_right_suspension` instead of remaining under the entity empty.
+- Imported Actions retain explicit start/end ranges derived from native EA02
+  sample timing.
+
+### Research
+
+- `HGH_Tank [8393]` uses `Skeleton_11070` for its combined tank/occupant rig:
+  ten of its 21 compatible clips animate only vehicle joints, six animate
+  vehicle motion plus root/camera joints, four are static poses, and one is a
+  mixed hatch/character interaction. `Skeleton_11067` belongs to the mounted
+  LMG child and has 19 compatible interaction clips.
+
+## 0.5.9 - 2026-11-14
+
+### Fixed
+
+- `HGH_Tank [8393]` now imports its enabled destructibility assembly instead
+  of only the mounted-gun child. Variable-length `DamagePassOn` arrays are
+  decoded as part of each destructibility part rather than making the entire
+  state layout appear unsupported.
+- Child bone/helper attachment lookup is case-insensitive while preserving the
+  source and Blender bone names. The tank's `Gunner_Bone` mover now attaches
+  to the retail skeleton's `gunner_bone` instead of remaining at the entity
+  origin.
+
+### Performance
+
+- EA02 animated frame-set keys, sparse key locations, and packed values are
+  decoded once per frame set and reused across sampled frames.
+- Blender 5.2's bundled NumPy accelerates DXT1/DXT3/DXT5 surface decoding.
+  The existing pure-Python decoder remains as an exact fallback, with
+  byte-for-byte regression coverage between both paths.
+- A profiled full `HGH_Tank [8393]` import with materials and animations
+  improved from **43.691 seconds to 10.103 seconds**. Action construction fell
+  from 31.711 seconds to 3.490 seconds, while texture surface decoding fell
+  from 4.550 seconds to below the profile's leading call list.
+
+## 0.5.8 - 2026-11-14
+
+### Fixed
+
+- Add-on registration no longer resets scene selectors while Blender exposes
+  restricted data during extension enablement. This prevents the
+  `'_RestrictData' object has no attribute 'scenes'` failure and the resulting
+  partially registered `KZ2_AddonPreferences` class.
+- Persistent source and catalog restoration still occurs during registration;
+  scene selectors are initialized normally and explicitly refreshed by the
+  persistent post-load handler once scene data is available.
+
+### Validation
+
+- The packaged extension enabled through Blender's restricted-data
+  `addon_utils` pathway with a persisted decrypted ISO, then restored all
+  7,241 entities and 18 levels without a registration error.
+- The complete Python 3.12 suite passed against the retail archive and bundled
+  index: **100 tests, zero failures, 18 Blender-only skips**.
+- The default Python 3.13 and `bpy` 5.2.2 suite passed against the retail
+  archive and bundled index: **100 tests, zero failures, seven intentional
+  exhaustive-tier skips**.
+- `io_scene_killzone2-0.5.8.zip` passed Blender's `blender_ext` manifest
+  validator.
+
+## 0.5.7 - 2026-11-14
+
+### Added
+
+- A bundled, fingerprint-validated retail catalog containing 7,241 importable
+  entities and all 18 campaign/multiplayer levels.
+- A bundled SQLite dependency index that works with either the matching
+  extracted PSARC or decrypted ISO.
+- Scene-independent persistence for the selected data source and active asset
+  catalog in Blender's user configuration directory.
+
+### Changed
+
+- Selecting the supported retail PSARC or ISO activates the bundled cache
+  immediately instead of requiring an initial full archive scan.
+- User-generated dependency indexes are stored outside the installed extension
+  so extension upgrades do not remove them.
+- Asset catalog and resource-index schemas now validate against the logical
+  PSARC fingerprint rather than a machine-specific file path and timestamp.
+
+### Validation
+
+- The complete Python 3.12 suite passed against the supported retail archive
+  and bundled index: **100 tests in 2.559 seconds, zero failures, 18
+  Blender-only skips**.
+- The default Python 3.13 and `bpy` 5.2.2 suite passed against the supported
+  retail archive and bundled index: **100 tests in 7.923 seconds, zero
+  failures, seven intentional exhaustive-tier skips**.
+- The bundled cache matched both the extracted retail PSARC and the decrypted
+  retail ISO, exposing 7,241 entities and 18 levels without a full scan.
+- The packaged extension activated the real ISO through its bundled cache and
+  restored the selected source and catalog through a new-file load handler and
+  in a fresh Blender 5.2.2 process using an isolated user configuration.
+- `io_scene_killzone2-0.5.7.zip` passed Blender's `blender_ext` manifest
+  validator.
+
+## 0.5.6 - 2026-11-14
+
+### Added
+
+- Direct decrypted-ISO data sources. The importer resolves and streams the
+  multi-extent `PS3_GAME/USRDIR/data_ps3.psarc` member without mounting the ISO
+  or extracting a temporary archive.
+
+### Validation
+
+- The complete Python 3.12 suite passed against the supported retail archive:
+  **98 tests in 1.757 seconds, zero failures, 17 Blender-only skips**.
+- The default Python 3.13 and `bpy` 5.2.2 suite passed against the supported
+  retail archive and persistent resource index: **98 tests in 7.604 seconds,
+  zero failures, seven intentional exhaustive-tier skips**.
+- Direct ISO validation streamed all seven extents of the retail
+  6,998,576,922-byte PSARC and matched sampled data from every extent against
+  the extracted archive. A full scan from the ISO cached **7,241 entities and
+  18 levels** with the same seven expected unsupported candidates, then
+  resolved an entity through the generated persistent resource index.
+
+## 0.5.5 - 2026-11-14
 
 ### Added
 
@@ -80,6 +263,7 @@ results.
   13.849 seconds** and **four level scenarios in 331.190 seconds**. The level
   total includes the intentionally expensive 280.906-second full multiplayer
   geometry regression.
+
 - Retail dropship validation imports 19 meshes, three armatures, ten Actions,
   and two helper-attached turret placements that move with the body rig.
 - Packaged-extension operator tests import and save both canonical Dropships,

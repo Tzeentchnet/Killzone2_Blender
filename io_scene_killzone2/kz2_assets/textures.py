@@ -5,6 +5,15 @@ from __future__ import annotations
 import struct
 from array import array
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+try:
+    import numpy as _numpy
+except ModuleNotFoundError:
+    _numpy = None  # type: ignore[assignment]
+
+if TYPE_CHECKING:
+    from numpy import ndarray
 
 from .binary import BinaryReader
 from .errors import UnsupportedFeatureError
@@ -457,14 +466,24 @@ def _decode_s3tc(
     height: int,
     pixel_format: TextureFormat,
 ) -> array:
-    pixels = array("f", [0.0]) * (width * height * 4)
     block_size = 8 if pixel_format is TextureFormat.S3TC1 else 16
     blocks_x = max(1, (width + 3) // 4)
     blocks_y = max(1, (height + 3) // 4)
     expected = blocks_x * blocks_y * block_size
     if len(data) != expected:
         raise ValueError(f"S3TC data size {len(data)} does not match {expected}")
+    if _numpy is not None:
+        return _decode_s3tc_numpy(
+            data,
+            width,
+            height,
+            pixel_format,
+            blocks_x,
+            blocks_y,
+            block_size,
+        )
 
+    pixels = array("f", [0.0]) * (width * height * 4)
     for block_y in range(blocks_y):
         for block_x in range(blocks_x):
             offset = (block_y * blocks_x + block_x) * block_size
@@ -500,6 +519,156 @@ def _decode_s3tc(
                         "f",
                         (color[0], color[1], color[2], alpha),
                     )
+    return pixels
+
+
+def _decode_s3tc_numpy(
+    data: bytes,
+    width: int,
+    height: int,
+    pixel_format: TextureFormat,
+    blocks_x: int,
+    blocks_y: int,
+    block_size: int,
+) -> array:
+    assert _numpy is not None
+    blocks: ndarray = _numpy.frombuffer(data, dtype=_numpy.uint8).reshape(
+        blocks_x * blocks_y,
+        block_size,
+    )
+    color_blocks = (
+        blocks
+        if pixel_format is TextureFormat.S3TC1
+        else blocks[:, 8:]
+    )
+    color_0 = (
+        color_blocks[:, 0].astype(_numpy.uint16)
+        | color_blocks[:, 1].astype(_numpy.uint16) << 8
+    )
+    color_1 = (
+        color_blocks[:, 2].astype(_numpy.uint16)
+        | color_blocks[:, 3].astype(_numpy.uint16) << 8
+    )
+
+    def rgb565(values):
+        return _numpy.stack(
+            (
+                ((values >> 11) & 0x1F) / 31.0,
+                ((values >> 5) & 0x3F) / 63.0,
+                (values & 0x1F) / 31.0,
+            ),
+            axis=1,
+        )
+
+    first = rgb565(color_0)
+    second = rgb565(color_1)
+    four_color = (
+        _numpy.ones(len(blocks), dtype=_numpy.bool_)
+        if pixel_format is not TextureFormat.S3TC1
+        else color_0 > color_1
+    )
+    colors: ndarray = _numpy.empty(
+        (len(blocks), 4, 4),
+        dtype=_numpy.float64,
+    )
+    colors[:, 0, :3] = first
+    colors[:, 1, :3] = second
+    colors[:, 2, :3] = _numpy.where(
+        four_color[:, None],
+        (2.0 * first + second) / 3.0,
+        (first + second) / 2.0,
+    )
+    colors[:, 3, :3] = _numpy.where(
+        four_color[:, None],
+        (first + 2.0 * second) / 3.0,
+        0.0,
+    )
+    colors[:, :, 3] = 1.0
+    colors[:, 3, 3] = _numpy.where(four_color, 1.0, 0.0)
+
+    color_bits = (
+        color_blocks[:, 4].astype(_numpy.uint32)
+        | color_blocks[:, 5].astype(_numpy.uint32) << 8
+        | color_blocks[:, 6].astype(_numpy.uint32) << 16
+        | color_blocks[:, 7].astype(_numpy.uint32) << 24
+    )
+    color_indices = (
+        color_bits[:, None]
+        >> (_numpy.arange(16, dtype=_numpy.uint32) * 2)
+    ) & 0x3
+    decoded = colors[
+        _numpy.arange(len(blocks))[:, None],
+        color_indices,
+    ]
+
+    if pixel_format is TextureFormat.S3TC3:
+        alpha_bits: ndarray = _numpy.zeros(
+            len(blocks),
+            dtype=_numpy.uint64,
+        )
+        for byte_index in range(8):
+            alpha_bits |= (
+                blocks[:, byte_index].astype(_numpy.uint64)
+                << (byte_index * 8)
+            )
+        alpha_indices = (
+            alpha_bits[:, None]
+            >> (_numpy.arange(16, dtype=_numpy.uint64) * 4)
+        ) & 0xF
+        decoded[:, :, 3] = alpha_indices / 15.0
+    elif pixel_format is TextureFormat.S3TC5:
+        alpha_0_bytes = blocks[:, 0]
+        alpha_1_bytes = blocks[:, 1]
+        alpha_0: ndarray = alpha_0_bytes.astype(_numpy.float64)
+        alpha_1: ndarray = alpha_1_bytes.astype(_numpy.float64)
+        alpha_table: ndarray = _numpy.empty(
+            (len(blocks), 8),
+            dtype=_numpy.float64,
+        )
+        alpha_table[:, 0] = alpha_0 / 255.0
+        alpha_table[:, 1] = alpha_1 / 255.0
+        interpolate_seven = alpha_0_bytes > alpha_1_bytes
+        for table_index in range(2, 8):
+            step = table_index - 1
+            seven_value = (
+                (7 - step) * alpha_0 + step * alpha_1
+            ) / (7.0 * 255.0)
+            if table_index <= 5:
+                five_value = (
+                    (5 - step) * alpha_0 + step * alpha_1
+                ) / (5.0 * 255.0)
+            elif table_index == 6:
+                five_value = 0.0
+            else:
+                five_value = 1.0
+            alpha_table[:, table_index] = _numpy.where(
+                interpolate_seven,
+                seven_value,
+                five_value,
+            )
+        alpha_bits = _numpy.zeros(len(blocks), dtype=_numpy.uint64)
+        for byte_index in range(6):
+            alpha_bits |= (
+                blocks[:, byte_index + 2].astype(_numpy.uint64)
+                << (byte_index * 8)
+            )
+        alpha_indices = (
+            alpha_bits[:, None]
+            >> (_numpy.arange(16, dtype=_numpy.uint64) * 3)
+        ) & 0x7
+        decoded[:, :, 3] = alpha_table[
+            _numpy.arange(len(blocks))[:, None],
+            alpha_indices,
+        ]
+
+    image = (
+        decoded.reshape(blocks_y, blocks_x, 4, 4, 4)
+        .transpose(0, 2, 1, 3, 4)
+        .reshape(blocks_y * 4, blocks_x * 4, 4)[:height, :width]
+    )
+    contiguous = _numpy.ascontiguousarray(image, dtype=_numpy.float32)
+    pixels = array("f")
+    pixels.frombytes(contiguous.tobytes())
     return pixels
 
 

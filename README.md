@@ -4,8 +4,9 @@ Blender 5.2 extension for independently decoded assets from the US retail
 release of Killzone 2 (`BCUS98116`, app/disc version `01.01`,
 `RTTIBin<1.58>`).
 
-No game data is included. Use this extension only with data you are legally
-entitled to inspect.
+No game asset payloads are included. The extension contains only a derived
+retail catalog and dependency lookup index; use it only with data you are
+legally entitled to inspect.
 
 ## Technical format documentation
 
@@ -29,6 +30,7 @@ explicitly distinguish validated behavior from guesses and unknown fields.
 | Retail 2D texture formats (`RGBA8`, DXT1/3/5, RGBA16F) | Supported |
 | Local render-effect graphs and profile-driven preview materials | Supported |
 | Named sampler nodes, source color spaces, and 64x1 ramps | Supported |
+| Exact HGH/ISA tank normal, packed material, and track color previews | Supported |
 | Packed YUV lightmap reconstruction with separate sun occlusion | Supported |
 | Local object references | Supported |
 | PSARC catalog/extraction library | Supported in the pure-Python API |
@@ -37,7 +39,7 @@ explicitly distinguish validated behavior from guesses and unknown fields.
 | Static map placements and parent transforms | Supported |
 | Entity placeholder props and destructible model parts | Supported |
 | Derived entity resources, recursive child models, and animated helper attachments | Supported for the validated retail profile |
-| Persistent PSARC entity catalog and sidebar import | Supported |
+| Bundled retail entity catalog, persistent source selection, and sidebar import | Supported |
 | Campaign/MP map hierarchy and direct PSARC level import | Supported |
 | Complete-map and individual-section collections | Supported |
 | Dedicated skybox geometry in level manifests | Supported |
@@ -73,7 +75,8 @@ version declared in `blender_manifest.toml`.
 Open **3D View > Sidebar > KZ2 Tools** for the extension's dedicated menu.
 The sidebar can still launch the extracted CORE file picker. It also provides
 complete level, individual section, and cached entity import directly from
-`data_ps3.psarc`. Each sidebar section is collapsible.
+`data_ps3.psarc` or a decrypted retail ISO. Each sidebar section is
+collapsible.
 
 Extracted `.core` files can also be imported by dragging them from a file
 manager into the 3D Viewport or Outliner, which opens the import options as a
@@ -82,15 +85,26 @@ each file is imported into its own collection.
 
 ![KZ2 Tools sidebar with extracted CORE, level, and cached entity import controls](docs/images/Blender_KZ2_Menu.png)
 
-To cache importable assets and maps:
+To select the retail data source and import cached assets and maps:
 
 1. Open the KZ2 Tools sidebar and choose **Settings**.
-2. Select the matching authorized retail `data_ps3.psarc`.
-3. Run **Scan / Rescan Assets and Maps** once.
-4. Use **Import Complete Level** to choose Campaign or Multiplayer, select a
+2. Select either the matching authorized retail `data_ps3.psarc` or a
+   decrypted retail ISO containing `PS3_GAME/USRDIR/data_ps3.psarc`.
+   The bundled catalog activates immediately; no initial archive scan is
+   required.
+   **Import Fake Shadow Meshes** is disabled by default in the same
+   preferences panel. Enable it only to preserve the game's low-poly vehicle
+   shadow volumes instead of using Blender's native shadows alone.
+3. Use **Import Complete Level** to choose Campaign or Multiplayer, select a
    map and section, then choose **Import Entire Map** or **Import Section**.
-5. To import one entity instead, choose a category, optionally search by asset
+4. To import one entity instead, choose a category, optionally search by asset
    name or source map, select a result, and choose **Import Entity**.
+
+The selected PSARC or ISO and active catalog are also written to Blender's
+user configuration directory. They are restored after **File > New**, after
+opening another `.blend`, and on the next Blender launch without relying on
+the current scene or manually saved Blender preferences. Use **Scan / Rescan
+Assets and Maps** only for an unrecognized archive or to rebuild its cache.
 
 The level browser contains all 10 campaign levels and all 8 retail multiplayer
 maps. Campaign entries expose the exact `LevelSection` hierarchy and enabled
@@ -122,10 +136,11 @@ compact source map/section label so map-local variants remain distinguishable.
 *A cached rigged entity imported with its material preview.*
 
 > [!WARNING]
-> The first scan may take several minutes because the archive contains thousands
-> of CORE entries. Expect it to take longer when `data_ps3.psarc` is on an
-> external USB drive. Later entity selection uses the persisted cache and does
-> not repeat the scan unless you explicitly rescan or the archive changes.
+> A manual scan of an unrecognized archive may take several minutes because it
+> contains thousands of CORE entries. Expect it to take longer when the PSARC
+> or ISO is on an external USB drive. Later entity selection uses the persisted
+> cache and does not repeat the scan unless you explicitly rescan or the data
+> source changes.
 
 
 Complete levels can contain hundreds of megabytes of optimized CORE data and
@@ -151,12 +166,40 @@ only enabled destructibility parts, and bind parts such as heads to the same
 armature as the body when they share its skeleton. Static keyframed
 destructibility parts with a bone name, including shootable Helghast helmets,
 are bone-parented with their part and state offset matrices so they follow
-animation until the point where the game would detach them.
+animation until the point where the game would detach them. Unnamed rigid
+parts are attached to the nearest rest joint that is actually weighted by a
+sibling skinned mesh; the inferred parent is recorded on the Blender object.
 
 Action discovery is limited to animation resources in the selected entity's
 own CORE. An externally resolved shared skeleton can still rig the entity, but
 animations from an unrelated CORE that happens to define the same skeleton
 are not imported.
+
+`HGH_Tank [8393]` contains two relevant rigs. `Skeleton_11070` is the
+131-joint combined tank/occupant rig and has 21 compatible clips: ten animate
+only vehicle joints, six animate vehicle motion plus the occupant root/camera
+joints, four are non-varying poses, and one is the mixed hatch/character
+interaction clip. `Skeleton_11067` is the 102-joint rig used by the mounted
+LMG child and has 19 compatible interaction clips. Imported Actions retain
+their explicit source-derived frame ranges.
+
+`ISA_Tank [8392]` likewise uses combined rigs. `Skeleton_11068` is the
+143-joint tank/occupant rig: its vehicle hierarchy contains the body, turret,
+rocket rack and launchers, sensor, guns, tracks, wheels, and tank camera. It
+has 36 compatible clips, including 18 that animate vehicle joints and 12
+non-varying poses; the other six combine vehicle and character interaction.
+The mounted-LMG child owns `Skeleton_90` and 18 Actions. Source parts named
+`LeftTrackInitialState` and `RightTrackInitialState` provide meshes `10301`
+and `10303`; their `_P00` and `_P01` suffixes identify material primitives,
+not damaged states. Explicit destructibility attachments are matched
+case-insensitively, so source `Body` parts follow the actual `body` joint.
+
+Exact profiles for both tanks connect their proven base normal maps and
+packed specular-power/intensity channels. The track shaders also multiply
+their base color by the secondary `UV0` color layer. Chassis detail-normal
+maps are identified and labeled but remain unconnected until their
+vehicle-specific composition is reproduced exactly; overheat ramps and
+emission layers are likewise preserved without a speculative preview.
 
 ![Playback of an imported full-body EA02 animation in Blender](docs/images/Blender_KZ2_full_body_animation.gif)
 
@@ -220,16 +263,16 @@ $env:KZ2_PSARC = "E:\path\to\data_ps3.psarc"
 python -m unittest .\tests\test_local_archive.py -v
 ```
 
-Retail Blender end-to-end tests should also use the persistent resource index
-created by **Scan Entities**. The entity tests use it when configured, and the
-level tests require it. Full discovery runs a focused retail tier by default:
-the HGH Dropship, canonical Commando head/helmet attachment, and every
-placement record from one multiplayer map, alongside the fast synthetic
-tests.
+Retail Blender end-to-end tests should also use the bundled persistent
+resource index, or one created by **Scan / Rescan Assets and Maps**. The entity
+tests use it when configured, and the level tests require it. Full discovery
+runs a focused retail tier by default: the HGH Dropship, canonical Commando
+head/helmet attachment, and every placement record from one multiplayer map,
+alongside the fast synthetic tests.
 
 ```powershell
 $env:KZ2_PSARC = "E:\path\to\data_ps3.psarc"
-$env:KZ2_RESOURCE_INDEX = "E:\path\to\resource-index-v2-....sqlite3"
+$env:KZ2_RESOURCE_INDEX = "E:\path\to\resource-index-v3-....sqlite3"
 python -m unittest discover -s .\tests -v --durations 0
 ```
 
@@ -275,10 +318,12 @@ or omit the positional path after setting `KZ2_PSARC`.
   unproven.
 - Render-effect graphs are preserved, but compiled PS3 shaders are not
   generally translated into equivalent Blender shaders. Proven profiles
-  select representative base color and opacity inputs, and static packed
-  lightmaps are reconstructed. Profile-specific normal signs, packed
-  specular channels, response-ramp coordinates, emissive effects, and IBL
-  paths remain unconnected until their shader arithmetic is validated.
+  select representative base color and opacity inputs; identified vehicle
+  profiles additionally connect normal, packed specular, and layered track
+  color inputs; and static packed lightmaps are reconstructed. Unprofiled
+  normal signs and packed channels, detail-normal composition,
+  response-ramp coordinates, emissive effects, and IBL paths remain
+  unconnected until their shader arithmetic is validated.
 - Cubemap faces and mips are parsed but are not yet converted from the
   game's Y-up face basis to Blender environment images.
 - Blend targets, collision shapes, render probes, and gameplay-specific

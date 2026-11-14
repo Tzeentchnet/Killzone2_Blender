@@ -93,12 +93,9 @@ class PsarcResourceResolver:
         self._failed_cores: dict[tuple[int, int, int], FormatError] = {}
         self._metadata: dict[tuple[int, int, int], _CoreMetadata] = {}
         if resource_index_path:
-            source_stat = self.archive.path.stat()
             self._resource_index: ResourceIndex | None = ResourceIndex(
                 resource_index_path,
-                source_path=self.archive.path,
-                source_size=self.archive.archive_size,
-                source_mtime_ns=source_stat.st_mtime_ns,
+                source_fingerprint=self.archive.fingerprint,
             )
             _LOG.info(
                 "Using persistent PSARC resource index: %s",
@@ -334,7 +331,8 @@ class PsarcResourceResolver:
         requested_ids: set[str],
         requested_names: set[tuple[str, str]],
     ) -> None:
-        for indexed in self._resource_index.definitions(requested_ids):
+        resource_index = self._require_resource_index()
+        for indexed in resource_index.definitions(requested_ids):
             definition = self._indexed_definition(indexed)
             definitions = self._definitions.setdefault(
                 indexed.object_id,
@@ -344,13 +342,11 @@ class PsarcResourceResolver:
                 definitions.append(definition)
             self.missing_ids.discard(indexed.object_id)
 
-        for indexed in self._resource_index.named_definitions(
-            requested_names
-        ):
+        for indexed in resource_index.named_definitions(requested_names):
             if indexed.resource_name is None:
                 raise FormatError(
                     "named PSARC resource index entry has no resource name",
-                    source=str(self._resource_index.path),
+                    source=str(resource_index.path),
                 )
             definition = self._indexed_definition(indexed)
             name_key = (indexed.type_name, indexed.resource_name)
@@ -363,12 +359,13 @@ class PsarcResourceResolver:
         self,
         indexed: IndexedResourceDefinition,
     ) -> _Definition:
+        resource_index = self._require_resource_index()
         try:
             entry = self.archive.get(indexed.path)
         except KeyError as exc:
             raise FormatError(
                 "PSARC resource index references a missing CORE; rescan it",
-                source=str(self._resource_index.path),
+                source=str(resource_index.path),
                 observed=indexed.path,
             ) from exc
         return _Definition(
@@ -377,6 +374,11 @@ class PsarcResourceResolver:
             type_name=indexed.type_name,
             opaque_id=opaque_id_from_display_id(indexed.object_id),
         )
+
+    def _require_resource_index(self) -> ResourceIndex:
+        if self._resource_index is None:
+            raise RuntimeError("persistent resource index is unavailable")
+        return self._resource_index
 
     def _decoder_for_catalog(
         self,

@@ -26,9 +26,9 @@ from .level_catalog import (
 from .model import EntityResource
 from .psarc import Psarc
 from .resolver import read_core_metadata
-from .resource_index import ResourceIndexWriter
+from .resource_index import ResourceIndex, ResourceIndexWriter
 
-ENTITY_ASSET_CACHE_VERSION = 4
+ENTITY_ASSET_CACHE_VERSION = 5
 _SUPPORTED_CACHE_VERSIONS = frozenset({ENTITY_ASSET_CACHE_VERSION})
 ENTITY_CATEGORY_ALL = "ALL"
 ENTITY_CATEGORY_MAPS = "MAPS"
@@ -172,6 +172,7 @@ class EntityAssetCatalog:
     source_path: str
     source_size: int
     source_mtime_ns: int
+    source_fingerprint: str
     resource_index_path: str
     entities: tuple[CachedEntity, ...]
     levels: tuple[CachedLevel, ...]
@@ -183,6 +184,7 @@ class EntityAssetCatalog:
             "source_path": self.source_path,
             "source_size": self.source_size,
             "source_mtime_ns": self.source_mtime_ns,
+            "source_fingerprint": self.source_fingerprint,
             "resource_index_path": self.resource_index_path,
             "entities": [asdict(value) for value in self.entities],
             "levels": [asdict(value) for value in self.levels],
@@ -213,6 +215,10 @@ class EntityAssetCatalog:
         source_path = _required_string(document, "source_path")
         source_size = _required_int(document, "source_size")
         source_mtime_ns = _required_int(document, "source_mtime_ns")
+        source_fingerprint = _required_string(
+            document,
+            "source_fingerprint",
+        )
         resource_index_path = _required_string(
             document,
             "resource_index_path",
@@ -275,6 +281,7 @@ class EntityAssetCatalog:
             source_path=source_path,
             source_size=source_size,
             source_mtime_ns=source_mtime_ns,
+            source_fingerprint=source_fingerprint,
             resource_index_path=resource_index_path,
             entities=entities,
             levels=levels,
@@ -399,6 +406,7 @@ def scan_entity_asset_catalog(
             source_path=resolved,
             source_size=initial_stat.st_size,
             source_mtime_ns=initial_stat.st_mtime_ns,
+            source_fingerprint=archive.fingerprint,
             supported_types=SUPPORTED_OBJECT_TYPES,
         )
         if index_path
@@ -423,6 +431,8 @@ def scan_entity_asset_catalog(
     )
     for core_index, entry in enumerate(core_entries, 1):
         path = entry.path
+        if path is None:
+            continue
         if core_index == 1 or core_index % 250 == 0:
             _LOG.info(
                 "Entity index progress: %d/%d CORE entries, %d entities found",
@@ -547,6 +557,7 @@ def scan_entity_asset_catalog(
         source_path=str(resolved),
         source_size=final_stat.st_size,
         source_mtime_ns=final_stat.st_mtime_ns,
+        source_fingerprint=archive.fingerprint,
         resource_index_path=index_path,
         entities=labeled_entities,
         levels=levels,
@@ -568,6 +579,45 @@ def scan_entity_asset_catalog(
         len(catalog.issues),
     )
     return catalog
+
+
+def materialize_bundled_asset_catalog(
+    source_path: str | Path,
+    catalog_json: str,
+    resource_index_path: str | Path,
+) -> EntityAssetCatalog:
+    resolved = Path(source_path).expanduser().resolve()
+    initial_stat = resolved.stat()
+    archive = Psarc.open(resolved, load_manifest=False)
+    template = EntityAssetCatalog.from_json(catalog_json)
+    if template.source_fingerprint != archive.fingerprint:
+        raise FormatError(
+            "data source does not match the bundled retail asset cache",
+            source=str(resolved),
+            expected=template.source_fingerprint,
+            observed=archive.fingerprint,
+        )
+    index_path = Path(resource_index_path).expanduser().resolve()
+    ResourceIndex(
+        index_path,
+        source_fingerprint=archive.fingerprint,
+    )
+    final_stat = resolved.stat()
+    if (
+        initial_stat.st_size != final_stat.st_size
+        or initial_stat.st_mtime_ns != final_stat.st_mtime_ns
+    ):
+        raise FormatError(
+            "data source changed while its bundled cache was activated",
+            source=str(resolved),
+        )
+    return replace(
+        template,
+        source_path=str(resolved),
+        source_size=final_stat.st_size,
+        source_mtime_ns=final_stat.st_mtime_ns,
+        resource_index_path=str(index_path),
+    )
 
 
 def _entity_display_name(

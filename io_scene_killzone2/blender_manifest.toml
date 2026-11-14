@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "io_scene_killzone2"
-version = "0.5.4"
+version = "0.5.12"
 name = "Killzone 2 Asset Importer"
 tagline = "Import KZ2 models, textured maps, rigs, and animations"
 maintainer = "Killzone 2 Blender contributors"
@@ -17,7 +17,7 @@ license = [
 ]
 
 [permissions]
-files = "Read selected CORE/PSARC files and write a local resource index"
+files = "Read game data and persist caches in Blender user data"
 
 [build]
 paths_exclude_pattern = [

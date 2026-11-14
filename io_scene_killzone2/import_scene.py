@@ -63,6 +63,9 @@ _LINEAR_INTERPOLATION = (
     .enum_items["LINEAR"]
     .value
 )
+_FAKE_SHADOW_RENDER_EFFECT_IDS = frozenset(
+    {"757c4f52084a594af42e280c3d599f7e"}
+)
 
 
 @dataclass(slots=True)
@@ -71,6 +74,7 @@ class ImportOptions:
     flip_uv_v: bool = True
     import_static_meshes: bool = True
     import_skinned_meshes: bool = True
+    import_fake_shadow_meshes: bool = False
     import_skeletons: bool = True
     import_animations: bool = True
     import_materials: bool = True
@@ -153,12 +157,15 @@ class _EntityArmature:
     decoder: CoreDecoder
     record: CoreObject
     skeleton: Skeleton
+    weighted_bone_names: set[str] = field(default_factory=set)
 
 
 @dataclass(frozen=True, slots=True)
 class _DestructibilityRenderInfo:
     part_id: int
     bone_name: str
+    state_name: str
+    model_part_name: str
     local_matrix: Matrix4
     state_offset_matrix: Matrix4
 
@@ -293,6 +300,15 @@ def import_core_file(
     elif options.import_static_meshes and not entity_placeholders:
         for record, decoded in decoder.iter_type("StaticMeshResource"):
             if isinstance(decoded, StaticMesh):
+                if (
+                    not options.import_fake_shadow_meshes
+                    and _is_fake_shadow_mesh(
+                        decoder,
+                        decoded,
+                        external_resolver,
+                    )
+                ):
+                    continue
                 result.meshes += _create_static_mesh(
                     collection,
                     decoder,
@@ -318,6 +334,15 @@ def import_core_file(
     if options.import_skinned_meshes:
         for record, decoded in decoder.iter_type("RegularSkinnedMeshResource"):
             if isinstance(decoded, SkinnedMesh):
+                if (
+                    not options.import_fake_shadow_meshes
+                    and _is_fake_shadow_mesh(
+                        decoder,
+                        decoded,
+                        external_resolver,
+                    )
+                ):
+                    continue
                 result.meshes += _create_skinned_mesh(
                     collection,
                     decoder,
@@ -994,6 +1019,13 @@ def _create_level_static_instances(
             )
             continue
         for leaf in leaves:
+            fake_shadow = _is_fake_shadow_mesh(
+                leaf.decoder,
+                leaf.mesh,
+                external_resolver,
+            )
+            if fake_shadow and not options.import_fake_shadow_meshes:
+                continue
             leaf_templates: Sequence[_MeshTemplate]
             if isinstance(leaf, _SkinnedMeshLeaf):
                 leaf_templates = _skinned_mesh_templates(
@@ -1037,6 +1069,8 @@ def _create_level_static_instances(
                 _set_source_properties(mesh_object, record)
                 mesh_object["kz2_mesh_object_index"] = leaf.record.index
                 mesh_object["kz2_wrapper_path"] = list(leaf.wrapper_path)
+                if fake_shadow:
+                    mesh_object["kz2_fake_shadow_mesh"] = True
                 if isinstance(leaf, _SkinnedMeshLeaf):
                     mesh_object["kz2_skinned_rest_pose"] = True
                 if leaf.lod_distance is not None:
@@ -1245,6 +1279,7 @@ def _create_entity_render_objects_impl(
     pending_destructibility_attachments: list[
         tuple[bpy.types.Object, _DestructibilityRenderInfo]
     ] = []
+    render_armatures: dict[tuple[int, int], _EntityArmature] = {}
     for render_reference in render_references:
         resource_decoder = render_reference.decoder
         mesh_reference = render_reference.reference
@@ -1260,6 +1295,13 @@ def _create_entity_render_objects_impl(
             )
             continue
         if isinstance(resolved_mesh.value, SkinnedMesh):
+            fake_shadow = _is_fake_shadow_mesh(
+                resolved_mesh.decoder,
+                resolved_mesh.value,
+                external_resolver,
+            )
+            if fake_shadow and not options.import_fake_shadow_meshes:
+                continue
             templates = _skinned_mesh_templates(
                 resolved_mesh.decoder,
                 resolved_mesh.record,
@@ -1281,7 +1323,7 @@ def _create_entity_render_objects_impl(
                     template.mesh_data,
                 )
                 collection.objects.link(mesh_object)
-                _bind_skinned_template(
+                target = _bind_skinned_template(
                     context,
                     collection,
                     placement,
@@ -1291,6 +1333,10 @@ def _create_entity_render_objects_impl(
                     result,
                     bound_armatures,
                 )
+                if target is not None:
+                    render_armatures[
+                        (id(target.decoder.core), target.record.index)
+                    ] = target
                 mesh_object.matrix_local = Matrix.Identity(4)
                 _set_source_properties(mesh_object, source_record)
                 mesh_object["kz2_mesh_object_index"] = (
@@ -1300,6 +1346,8 @@ def _create_entity_render_objects_impl(
                     resolved_mesh.decoder.core.source
                 )
                 mesh_object["kz2_skinned_rest_pose"] = True
+                if fake_shadow:
+                    mesh_object["kz2_fake_shadow_mesh"] = True
                 _set_destructibility_properties(
                     mesh_object,
                     render_reference.destructibility,
@@ -1314,6 +1362,13 @@ def _create_entity_render_objects_impl(
             external_resolver=external_resolver,
         )
         for leaf in leaves:
+            fake_shadow = _is_fake_shadow_mesh(
+                leaf.decoder,
+                leaf.mesh,
+                external_resolver,
+            )
+            if fake_shadow and not options.import_fake_shadow_meshes:
+                continue
             leaf_templates: Sequence[_MeshTemplate]
             if isinstance(leaf, _SkinnedMeshLeaf):
                 leaf_templates = _skinned_mesh_templates(
@@ -1350,7 +1405,7 @@ def _create_entity_render_objects_impl(
                 )
                 collection.objects.link(mesh_object)
                 if isinstance(leaf_template, _SkinnedMeshTemplate):
-                    _bind_skinned_template(
+                    target = _bind_skinned_template(
                         context,
                         collection,
                         placement,
@@ -1360,6 +1415,10 @@ def _create_entity_render_objects_impl(
                         result,
                         bound_armatures,
                     )
+                    if target is not None:
+                        render_armatures[
+                            (id(target.decoder.core), target.record.index)
+                        ] = target
                 else:
                     mesh_object.parent = placement
                 mesh_object.matrix_local = _wrapper_matrix(
@@ -1370,16 +1429,15 @@ def _create_entity_render_objects_impl(
                 mesh_object["kz2_mesh_object_index"] = leaf.record.index
                 mesh_object["kz2_mesh_source"] = leaf.decoder.core.source
                 mesh_object["kz2_wrapper_path"] = list(leaf.wrapper_path)
+                if fake_shadow:
+                    mesh_object["kz2_fake_shadow_mesh"] = True
                 _set_destructibility_properties(
                     mesh_object,
                     render_reference.destructibility,
                 )
                 if isinstance(leaf, _SkinnedMeshLeaf):
                     mesh_object["kz2_skinned_rest_pose"] = True
-                elif (
-                    render_reference.destructibility is not None
-                    and render_reference.destructibility.bone_name
-                ):
+                elif render_reference.destructibility is not None:
                     pending_destructibility_attachments.append(
                         (
                             mesh_object,
@@ -1410,6 +1468,7 @@ def _create_entity_render_objects_impl(
             bound_armatures,
             options,
             result,
+            fallback_armatures=render_armatures,
         )
     for child_reference in entity_value.child_entities:
         if child_reference.is_null:
@@ -1546,6 +1605,7 @@ def _attach_child_entity(
 
     matches: list[tuple[_EntityArmature, str | None, Matrix]] = []
     unresolved_helper_parent: int | None = None
+    target_name = mover.target_name.casefold()
     for target in parent_armatures.values():
         joint_world_matrices = _joint_world_matrices(
             target.skeleton,
@@ -1553,7 +1613,7 @@ def _attach_child_entity(
         )
         if mover.target_kind == "helper":
             for helper in target.skeleton.helpers:
-                if helper.name != mover.target_name:
+                if helper.name.casefold() != target_name:
                     continue
                 if helper.parent_index is None:
                     parent_bone = None
@@ -1578,7 +1638,7 @@ def _attach_child_entity(
                 )
         else:
             for joint_index, joint in enumerate(target.skeleton.joints):
-                if joint.name == mover.target_name:
+                if joint.name.casefold() == target_name:
                     matches.append(
                         (
                             target,
@@ -1637,6 +1697,12 @@ def _set_destructibility_properties(
         return
     mesh_object["kz2_destructibility_part_id"] = destructibility.part_id
     mesh_object["kz2_destructibility_bone"] = destructibility.bone_name
+    mesh_object["kz2_destructibility_state_name"] = (
+        destructibility.state_name
+    )
+    mesh_object["kz2_destructibility_model_part_name"] = (
+        destructibility.model_part_name
+    )
 
 
 def _attach_destructibility_mesh(
@@ -1645,12 +1711,22 @@ def _attach_destructibility_mesh(
     armatures: dict[tuple[int, int], _EntityArmature],
     options: ImportOptions,
     result: ImportResult,
+    *,
+    fallback_armatures: dict[tuple[int, int], _EntityArmature] | None = None,
 ) -> None:
+    if not destructibility.bone_name:
+        _attach_unnamed_destructibility_mesh(
+            mesh_object,
+            fallback_armatures or {},
+            options,
+        )
+        return
+    target_name = destructibility.bone_name.casefold()
     matches = [
         (target, joint_index)
         for target in armatures.values()
         for joint_index, joint in enumerate(target.skeleton.joints)
-        if joint.name == destructibility.bone_name
+        if joint.name.casefold() == target_name
     ]
     if len(matches) != 1:
         detail = "was not found" if not matches else "is ambiguous"
@@ -1662,6 +1738,7 @@ def _attach_destructibility_mesh(
         return
 
     target, joint_index = matches[0]
+    parent_bone = target.skeleton.joints[joint_index].name
     wrapper_matrix = mesh_object.matrix_local.copy()
     attachment_matrix = (
         _joint_world_matrices(
@@ -1674,9 +1751,69 @@ def _attach_destructibility_mesh(
     )
     mesh_object.parent = target.object
     mesh_object.parent_type = "BONE"
-    mesh_object.parent_bone = destructibility.bone_name
+    mesh_object.parent_bone = parent_bone
     mesh_object.matrix_world = target.object.matrix_world @ attachment_matrix
     mesh_object["kz2_destructibility_bone_attached"] = True
+    mesh_object["kz2_destructibility_parent_bone"] = parent_bone
+
+
+def _attach_unnamed_destructibility_mesh(
+    mesh_object: bpy.types.Object,
+    armatures: dict[tuple[int, int], _EntityArmature],
+    options: ImportOptions,
+) -> None:
+    if not armatures or not mesh_object.bound_box:
+        return
+    local_center = sum(
+        (Vector(corner) for corner in mesh_object.bound_box),
+        Vector(),
+    ) / len(mesh_object.bound_box)
+    world_center = mesh_object.matrix_world @ local_center
+    candidates: list[tuple[float, int, int, _EntityArmature]] = []
+    for target in armatures.values():
+        if not target.weighted_bone_names:
+            continue
+        armature_center = (
+            target.object.matrix_world.inverted_safe() @ world_center
+        )
+        for joint_index, (joint, rest_world) in enumerate(
+            zip(
+                target.skeleton.joints,
+                _joint_world_matrices(
+                    target.skeleton,
+                    options.global_scale,
+                ),
+                strict=True,
+            )
+        ):
+            if joint.name not in target.weighted_bone_names:
+                continue
+            candidates.append(
+                (
+                    (armature_center - rest_world.translation).length_squared,
+                    target.record.index,
+                    joint_index,
+                    target,
+                )
+            )
+    if not candidates:
+        return
+    candidates.sort(key=lambda candidate: candidate[:3])
+    if (
+        len(candidates) > 1
+        and abs(candidates[0][0] - candidates[1][0]) <= 1e-12
+    ):
+        return
+
+    _, _, joint_index, target = candidates[0]
+    parent_bone = target.skeleton.joints[joint_index].name
+    original_world = mesh_object.matrix_world.copy()
+    mesh_object.parent = target.object
+    mesh_object.parent_type = "BONE"
+    mesh_object.parent_bone = parent_bone
+    mesh_object.matrix_world = original_world
+    mesh_object["kz2_destructibility_bone_inferred"] = True
+    mesh_object["kz2_destructibility_parent_bone"] = parent_bone
 
 
 def _resolve_named_entity(
@@ -1860,6 +1997,8 @@ def _entity_render_references(
                     _DestructibilityRenderInfo(
                         part_id=part_id,
                         bone_name=bone_name,
+                        state_name=state.value.prefix.name,
+                        model_part_name=part.value.prefix.name,
                         local_matrix=local_matrix,
                         state_offset_matrix=state.value.offset_matrix,
                     ),
@@ -1881,6 +2020,48 @@ def _resolve_reference(
     if reference.external_id.casefold() not in external_resolver.requested_ids:
         external_resolver.add_requested_ids({reference.external_id})
     return external_resolver.resolve(reference.external_id)
+
+
+def _is_fake_shadow_mesh(
+    decoder: CoreDecoder,
+    mesh: StaticMesh | SkinnedMesh,
+    external_resolver: PsarcResourceResolver | None,
+) -> bool:
+    effect_ids: list[str] = []
+    for primitive_index, primitive_reference in enumerate(mesh.primitives):
+        primitive_resource = _resolve_reference(
+            decoder,
+            primitive_reference,
+            external_resolver,
+        )
+        if primitive_resource is None or not isinstance(
+            primitive_resource.value,
+            Primitive,
+        ):
+            return False
+        primitive = primitive_resource.value
+        effect_reference = primitive.render_effect
+        effect_decoder = primitive_resource.decoder
+        if (
+            isinstance(mesh, SkinnedMesh)
+            and primitive_index < len(mesh.render_effects)
+        ):
+            effect_reference = mesh.render_effects[primitive_index]
+            effect_decoder = decoder
+        if effect_reference.is_null:
+            return False
+        effect_resource = _resolve_reference(
+            effect_decoder,
+            effect_reference,
+            external_resolver,
+        )
+        if effect_resource is None:
+            return False
+        effect_ids.append(effect_resource.record.display_id)
+    return bool(effect_ids) and all(
+        effect_id in _FAKE_SHADOW_RENDER_EFFECT_IDS
+        for effect_id in effect_ids
+    )
 
 
 def _reference_label(
@@ -2312,9 +2493,10 @@ def _bind_skinned_template(
     options: ImportOptions,
     result: ImportResult,
     armatures: dict[tuple[int, int], _EntityArmature],
-) -> None:
+) -> _EntityArmature | None:
+    weighted_bone_names: set[str] = set()
     if template.bone_bindings is not None:
-        _add_skin_weights(
+        weighted_bone_names = _add_skin_weights(
             mesh_object,
             template.skin_vertices,
             template.bone_bindings,
@@ -2328,7 +2510,7 @@ def _bind_skinned_template(
         or not (options.import_skeletons or options.import_skinned_meshes)
     ):
         mesh_object.parent = placement
-        return
+        return None
 
     key = (
         id(template.skeleton_decoder.core),
@@ -2346,6 +2528,7 @@ def _bind_skinned_template(
         armature_object.parent = placement
         armature_object.matrix_local = Matrix.Identity(4)
         armature_object["kz2_cached_entity_armature"] = True
+        armature_object["kz2_armature_owner"] = placement.name
         target = _EntityArmature(
             armature_object,
             template.skeleton_decoder,
@@ -2354,12 +2537,14 @@ def _bind_skinned_template(
         )
         armatures[key] = target
         result.armatures += 1
+    target.weighted_bone_names.update(weighted_bone_names)
     modifier = mesh_object.modifiers.new(
         name="KZ2 Armature",
         type="ARMATURE",
     )
     modifier.object = target.object
     mesh_object.parent = target.object
+    return target
 
 
 def _apply_instance_material_overrides(
@@ -2737,12 +2922,13 @@ def _add_skin_weights(
     vertices,
     bindings: BoneBindings,
     result: ImportResult,
-) -> None:
+) -> set[str]:
     groups = {
         index: obj.vertex_groups.new(name=name or f"Bone_{index:03d}")
         for index, name in enumerate(bindings.bone_names)
     }
     invalid: set[int] = set()
+    weighted_bone_names: set[str] = set()
     # Quantized KZ2 weights repeat heavily, so batching vertices that share a
     # (bone, weight) pair turns one RNA call per influence into a few hundred.
     batches: dict[tuple[int, float], list[int]] = {}
@@ -2757,6 +2943,7 @@ def _add_skin_weights(
             if bone_index not in groups:
                 invalid.add(bone_index)
                 continue
+            weighted_bone_names.add(bindings.bone_names[bone_index])
             batches.setdefault((bone_index, weight), []).append(vertex_index)
     for (bone_index, weight), vertex_indices in batches.items():
         groups[bone_index].add(vertex_indices, weight, "ADD")
@@ -2764,6 +2951,7 @@ def _add_skin_weights(
         result.warnings.append(
             f"{obj.name}: ignored out-of-range skin bone indices {sorted(invalid)}"
         )
+    return weighted_bone_names
 
 
 def _create_armature(

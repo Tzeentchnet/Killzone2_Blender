@@ -40,6 +40,14 @@ class BuildExtensionTests(unittest.TestCase):
             with zipfile.ZipFile(output) as archive:
                 self.assertIn("blender_manifest.toml", archive.namelist())
                 self.assertIn("LICENSE", archive.namelist())
+                self.assertIn(
+                    "default_cache/asset-catalog.json",
+                    archive.namelist(),
+                )
+                self.assertIn(
+                    "default_cache/resource-index-v3.sqlite3",
+                    archive.namelist(),
+                )
 
 
 if __name__ == "__main__":

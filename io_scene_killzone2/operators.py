@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 from dataclasses import replace
@@ -10,6 +11,7 @@ from pathlib import Path
 from typing import ClassVar
 
 import bpy
+from bpy.app.handlers import persistent
 from bpy.props import (
     BoolProperty,
     CollectionProperty,
@@ -35,12 +37,14 @@ from .import_scene import (
     import_psarc_level,
 )
 from .kz2_assets.asset_catalog import (
+    ENTITY_ASSET_CACHE_VERSION,
     ENTITY_CATEGORY_ALL,
     ENTITY_CATEGORY_ITEMS,
     CachedEntity,
     EntityAssetCatalog,
     cached_entity_source_label,
     filter_cached_entity_indices,
+    materialize_bundled_asset_catalog,
     scan_entity_asset_catalog,
 )
 from .kz2_assets.errors import FormatError, Kz2AssetError
@@ -56,8 +60,21 @@ _LOG = logging.getLogger(__name__)
 _ADDON_ID = __package__
 _NO_ITEMS = "__NONE__"
 _ENTITY_PAGE_SIZE = 12
+_PERSISTENT_STATE_VERSION = 1
+_PERSISTENT_DIRECTORY = "io_scene_killzone2"
+_PERSISTENT_STATE_FILENAME = "state-v1.json"
+_PERSISTENT_CATALOG_FILENAME = (
+    f"asset-catalog-v{ENTITY_ASSET_CACHE_VERSION}.json"
+)
+_BUNDLED_CACHE_DIRECTORY = Path(__file__).with_name("default_cache")
+_BUNDLED_CATALOG_PATH = _BUNDLED_CACHE_DIRECTORY / "asset-catalog.json"
+_BUNDLED_RESOURCE_INDEX_PATH = (
+    _BUNDLED_CACHE_DIRECTORY
+    / f"resource-index-v{RESOURCE_INDEX_VERSION}.sqlite3"
+)
 _cached_json = ""
 _cached_catalog: EntityAssetCatalog | None = None
+_restoring_preferences = False
 
 
 def _invalidate_runtime_cache() -> None:
@@ -173,7 +190,7 @@ def _selected_level(
 
 
 _NO_CATALOG_LEVEL_ITEMS = [
-    (_NO_ITEMS, "No Maps", "Index the configured PSARC first")
+    (_NO_ITEMS, "No Maps", "Index the configured data source first")
 ]
 _NO_GROUP_LEVEL_ITEMS = [
     (_NO_ITEMS, "No Maps", "No maps were cached for this group")
@@ -191,6 +208,8 @@ def _level_asset_items(
     _scene: bpy.types.Scene,
     context: bpy.types.Context | None,
 ) -> list[tuple[str, str, str]]:
+    if context is None:
+        return _NO_CATALOG_LEVEL_ITEMS
     catalog = _safe_current_catalog(context)
     if catalog is None:
         return _NO_CATALOG_LEVEL_ITEMS
@@ -272,17 +291,264 @@ def _resource_index_path(source_path: str) -> str:
         f"{source_stat.st_size}\0{source_stat.st_mtime_ns}"
     )
     digest = hashlib.sha256(signature.encode("utf-8")).hexdigest()[:16]
-    cache_root = Path(
-        bpy.utils.extension_path_user(
-            _ADDON_ID,
-            path=".cache",
-            create=True,
-        )
-    )
+    cache_root = _persistent_cache_root()
     return str(
         cache_root
         / f"resource-index-v{RESOURCE_INDEX_VERSION}-{digest}.sqlite3"
     )
+
+
+def _persistent_cache_root() -> Path:
+    value = bpy.utils.user_resource(
+        "CONFIG",
+        path=_PERSISTENT_DIRECTORY,
+        create=True,
+    )
+    if not value:
+        raise OSError("Blender user configuration directory is unavailable")
+    return Path(value)
+
+
+def _bundled_catalog(source_path: str) -> EntityAssetCatalog:
+    try:
+        catalog_json = _BUNDLED_CATALOG_PATH.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise FormatError(
+            "bundled retail asset catalog is unavailable",
+            source=str(_BUNDLED_CATALOG_PATH),
+            observed=str(exc),
+        ) from exc
+    return materialize_bundled_asset_catalog(
+        source_path,
+        catalog_json,
+        _BUNDLED_RESOURCE_INDEX_PATH,
+    )
+
+
+def _atomic_write_text(path: Path, value: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f"{path.name}.tmp")
+    try:
+        temporary.write_text(value, encoding="utf-8")
+        os.replace(temporary, path)
+    except OSError:
+        if temporary.exists():
+            temporary.unlink()
+        raise
+
+
+def _save_persistent_state(
+    source_path: str,
+    catalog: EntityAssetCatalog | None,
+) -> None:
+    root = _persistent_cache_root()
+    catalog_path = root / _PERSISTENT_CATALOG_FILENAME
+    if catalog is None:
+        if catalog_path.exists():
+            catalog_path.unlink()
+    else:
+        _atomic_write_text(catalog_path, catalog.to_json())
+    state = {
+        "version": _PERSISTENT_STATE_VERSION,
+        "archive_source": source_path,
+        "catalog_file": catalog_path.name if catalog is not None else "",
+    }
+    _atomic_write_text(
+        root / _PERSISTENT_STATE_FILENAME,
+        json.dumps(
+            state,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ),
+    )
+
+
+def _load_persistent_state() -> tuple[str, EntityAssetCatalog | None]:
+    root = _persistent_cache_root()
+    state_path = root / _PERSISTENT_STATE_FILENAME
+    if not state_path.is_file():
+        return "", None
+    try:
+        document = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FormatError(
+            "persistent Killzone 2 importer state is invalid",
+            source=str(state_path),
+            observed=str(exc),
+        ) from exc
+    if not isinstance(document, dict):
+        raise FormatError(
+            "persistent Killzone 2 importer state root must be an object",
+            source=str(state_path),
+        )
+    if document.get("version") != _PERSISTENT_STATE_VERSION:
+        raise FormatError(
+            "persistent Killzone 2 importer state version is unsupported",
+            source=str(state_path),
+            expected=_PERSISTENT_STATE_VERSION,
+            observed=document.get("version"),
+        )
+    source_path = document.get("archive_source")
+    catalog_file = document.get("catalog_file")
+    if not isinstance(source_path, str) or not isinstance(catalog_file, str):
+        raise FormatError(
+            "persistent Killzone 2 importer state fields are invalid",
+            source=str(state_path),
+        )
+    if not catalog_file:
+        return source_path, None
+    if catalog_file != _PERSISTENT_CATALOG_FILENAME:
+        raise FormatError(
+            "persistent Killzone 2 asset catalog filename is invalid",
+            source=str(state_path),
+            expected=_PERSISTENT_CATALOG_FILENAME,
+            observed=catalog_file,
+        )
+    catalog_path = root / catalog_file
+    try:
+        catalog_json = catalog_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        _LOG.error(
+            "Persistent Killzone 2 asset catalog is unavailable: %s",
+            exc,
+        )
+        return source_path, None
+    try:
+        return source_path, EntityAssetCatalog.from_json(catalog_json)
+    except Kz2AssetError as exc:
+        _LOG.error("Persistent Killzone 2 asset catalog is invalid: %s", exc)
+        return source_path, None
+
+
+def _assign_preferences(
+    preferences: KZ2_AddonPreferences,
+    source_path: str,
+    catalog: EntityAssetCatalog | None,
+) -> None:
+    global _restoring_preferences
+    _restoring_preferences = True
+    try:
+        preferences.archive_source = source_path
+        preferences.entity_cache_json = (
+            "" if catalog is None else catalog.to_json()
+        )
+    finally:
+        _restoring_preferences = False
+    _invalidate_runtime_cache()
+    if catalog is not None:
+        _catalog_from_preferences(preferences)
+
+
+def _persist_preferences(
+    preferences: KZ2_AddonPreferences,
+    source_path: str,
+    catalog: EntityAssetCatalog | None,
+) -> None:
+    _assign_preferences(preferences, source_path, catalog)
+    try:
+        _save_persistent_state(source_path, catalog)
+    except OSError as exc:
+        _LOG.error("Failed to persist Killzone 2 importer state: %s", exc)
+
+
+def _archive_source_updated(
+    preferences: KZ2_AddonPreferences,
+    _context: bpy.types.Context,
+) -> None:
+    if _restoring_preferences:
+        return
+    source_path = ""
+    catalog = None
+    if preferences.archive_source:
+        source_path = str(
+            Path(bpy.path.abspath(preferences.archive_source))
+            .expanduser()
+            .resolve()
+        )
+        try:
+            catalog = _bundled_catalog(source_path)
+        except FormatError as exc:
+            _LOG.info("Bundled retail cache was not activated: %s", exc)
+            if preferences.entity_cache_json:
+                try:
+                    current = EntityAssetCatalog.from_json(
+                        preferences.entity_cache_json
+                    )
+                    if current.matches_source(source_path):
+                        catalog = current
+                except (Kz2AssetError, OSError) as cache_exc:
+                    _LOG.warning(
+                        "Existing data-source cache is unusable: %s",
+                        cache_exc,
+                    )
+        except OSError as exc:
+            _LOG.error("Failed to inspect the selected data source: %s", exc)
+    _persist_preferences(preferences, source_path, catalog)
+    if catalog is not None:
+        _reset_scene_selections(catalog)
+
+
+def _restore_persistent_preferences(
+    *,
+    reset_scene_selections: bool = True,
+) -> None:
+    try:
+        preferences = _addon_preferences(bpy.context)
+    except Kz2AssetError as exc:
+        _LOG.error("Failed to access add-on preferences: %s", exc)
+        return
+    source_path = ""
+    catalog = None
+    try:
+        source_path, catalog = _load_persistent_state()
+    except (Kz2AssetError, OSError) as exc:
+        _LOG.error("Failed to load persistent importer state: %s", exc)
+
+    if not source_path and preferences.archive_source:
+        source_path = str(
+            Path(bpy.path.abspath(preferences.archive_source))
+            .expanduser()
+            .resolve()
+        )
+        if preferences.entity_cache_json:
+            try:
+                catalog = EntityAssetCatalog.from_json(
+                    preferences.entity_cache_json
+                )
+            except Kz2AssetError as exc:
+                _LOG.warning(
+                    "Stored add-on preference cache is unusable: %s",
+                    exc,
+                )
+    if source_path:
+        try:
+            catalog = _bundled_catalog(source_path)
+        except FormatError as exc:
+            _LOG.info("Bundled retail cache was not activated: %s", exc)
+        except OSError as exc:
+            _LOG.error("Failed to inspect the persisted data source: %s", exc)
+        if catalog is not None:
+            try:
+                if not catalog.matches_source(source_path):
+                    catalog = None
+            except OSError as exc:
+                _LOG.error("Persisted data source is unavailable: %s", exc)
+                catalog = None
+    _assign_preferences(preferences, source_path, catalog)
+    if source_path or catalog is not None:
+        try:
+            _save_persistent_state(source_path, catalog)
+        except OSError as exc:
+            _LOG.error("Failed to refresh persistent importer state: %s", exc)
+    if catalog is not None and reset_scene_selections:
+        _reset_scene_selections(catalog)
+
+
+@persistent
+def _restore_persistent_preferences_after_load(_filepath: str) -> None:
+    _restore_persistent_preferences()
 
 
 def _reset_scene_selections(catalog: EntityAssetCatalog) -> None:
@@ -350,20 +616,32 @@ class KZ2_AddonPreferences(AddonPreferences):
     bl_idname = _ADDON_ID
 
     archive_source: StringProperty(  # type: ignore[valid-type]
-        name="Killzone 2 PSARC",
-        description="Authorized retail data_ps3.psarc archive",
+        name="Killzone 2 Data Source",
+        description=(
+            "Authorized retail data_ps3.psarc or decrypted Killzone 2 ISO"
+        ),
         subtype="FILE_PATH",
         default="",
+        update=_archive_source_updated,
     )
     entity_cache_json: StringProperty(  # type: ignore[valid-type]
         name="Entity Asset Cache",
         options={"HIDDEN"},
         default="",
     )
+    import_fake_shadow_meshes: BoolProperty(  # type: ignore[valid-type]
+        name="Import Fake Shadow Meshes",
+        description=(
+            "Include low-poly vehicle fake-shadow volumes; disabled by "
+            "default because Blender lighting provides its own shadows"
+        ),
+        default=False,
+    )
 
     def draw(self, context: bpy.types.Context) -> None:
         layout = self.layout
         layout.prop(self, "archive_source")
+        layout.prop(self, "import_fake_shadow_meshes")
         layout.operator(
             KZ2_OT_scan_entities.bl_idname,
             text="Scan / Rescan Assets and Maps",
@@ -371,14 +649,22 @@ class KZ2_AddonPreferences(AddonPreferences):
         )
         layout.label(
             text=(
-                "The first scan may take several minutes, especially on "
-                "external USB drives."
+                "The retail cache loads automatically; scan only an "
+                "unrecognized source."
             ),
             icon="INFO",
         )
         if not self.entity_cache_json:
+            message = (
+                "This source does not match the retail cache; scan it once."
+                if self.archive_source
+                else (
+                    "Choose data_ps3.psarc or a decrypted retail ISO; "
+                    "its cache loads automatically."
+                )
+            )
             layout.label(
-                text="Choose data_ps3.psarc, then scan once.",
+                text=message,
                 icon="INFO",
             )
             return
@@ -407,7 +693,7 @@ class KZ2_AddonPreferences(AddonPreferences):
             box = layout.box()
             box.alert = True
             box.label(
-                text="The PSARC changed after scanning. Rescan it.",
+                text="The data source changed after scanning. Rescan it.",
                 icon="ERROR",
             )
             return
@@ -439,13 +725,13 @@ class KZ2_AddonPreferences(AddonPreferences):
 
 
 class KZ2_OT_scan_entities(Operator):
-    """Scan the configured PSARC and persist assets and map hierarchy."""
+    """Scan the configured data source and persist assets and map hierarchy."""
 
     bl_idname = "kz2.scan_entities"
     bl_label = "Scan Importable Entities"
     bl_description = (
         "Index render-backed entities, maps, and external dependencies in the "
-        "configured PSARC; the first scan may take several minutes"
+        "configured PSARC or ISO; the first scan may take several minutes"
     )
     bl_options: ClassVar[set[str]] = {"REGISTER"}
 
@@ -454,7 +740,7 @@ class KZ2_OT_scan_entities(Operator):
         if not preferences.archive_source:
             self.report(
                 {"ERROR"},
-                "Choose a Killzone 2 data_ps3.psarc first",
+                "Choose data_ps3.psarc or a decrypted Killzone 2 ISO first",
             )
             return {"CANCELLED"}
         source_path = bpy.path.abspath(preferences.archive_source)
@@ -471,10 +757,11 @@ class KZ2_OT_scan_entities(Operator):
             return {"CANCELLED"}
         finally:
             context.window_manager.progress_end()
-        preferences.archive_source = catalog.source_path
-        preferences.entity_cache_json = catalog.to_json()
-        _invalidate_runtime_cache()
-        _catalog_from_preferences(preferences)
+        _persist_preferences(
+            preferences,
+            catalog.source_path,
+            catalog,
+        )
         _reset_scene_selections(catalog)
         if catalog.issues:
             self.report(
@@ -505,7 +792,7 @@ class KZ2_OT_scan_levels(Operator):
             catalog = _current_catalog(context)
             if catalog is None:
                 raise FormatError(
-                    "Scan the configured PSARC before indexing maps"
+                    "Scan the configured data source before indexing maps"
                 )
             levels = scan_level_catalog(catalog.source_path)
         except (Kz2AssetError, OSError) as exc:
@@ -514,16 +801,18 @@ class KZ2_OT_scan_levels(Operator):
             return {"CANCELLED"}
         updated = replace(catalog, levels=levels)
         preferences = _addon_preferences(context)
-        preferences.entity_cache_json = updated.to_json()
-        _invalidate_runtime_cache()
-        _catalog_from_preferences(preferences)
+        _persist_preferences(
+            preferences,
+            updated.source_path,
+            updated,
+        )
         _reset_scene_selections(updated)
         self.report({"INFO"}, f"Cached {len(levels)} campaign and MP maps")
         return {"FINISHED"}
 
 
 class KZ2_OT_open_preferences(Operator):
-    """Open Blender preferences to configure the Killzone 2 PSARC."""
+    """Open Blender preferences to configure the Killzone 2 data source."""
 
     bl_idname = "kz2.open_preferences"
     bl_label = "Open Add-on Preferences"
@@ -604,10 +893,10 @@ class IMPORT_SCENE_OT_killzone2_core(Operator, ImportHelper):
         default=False,
     )
     source_psarc: StringProperty(  # type: ignore[valid-type]
-        name="Source PSARC",
+        name="Source Data",
         description=(
-            "Optional data_ps3.psarc used to resolve external resources; "
-            "blank uses the PSARC configured in add-on preferences"
+            "Optional data_ps3.psarc or decrypted ISO used to resolve "
+            "external resources; blank uses the configured data source"
         ),
         subtype="FILE_PATH",
         default="",
@@ -652,9 +941,9 @@ class IMPORT_SCENE_OT_killzone2_core(Operator, ImportHelper):
         header, body = layout.panel("KZ2_import_resources", default_closed=True)
         header.label(text="External Resources")
         if body:
-            body.prop(self, "source_psarc", text="PSARC")
+            body.prop(self, "source_psarc", text="Data Source")
             if not self.source_psarc:
-                body.label(text="Blank uses the add-on preferences PSARC")
+                body.label(text="Blank uses the configured data source")
 
         header, body = layout.panel("KZ2_import_diagnostics", default_closed=True)
         header.label(text="Diagnostics")
@@ -730,6 +1019,9 @@ class IMPORT_SCENE_OT_killzone2_core(Operator, ImportHelper):
                 flip_uv_v=self.flip_uv_v,
                 import_static_meshes=self.import_static_meshes,
                 import_skinned_meshes=self.import_skinned_meshes,
+                import_fake_shadow_meshes=(
+                    _addon_preferences(context).import_fake_shadow_meshes
+                ),
                 import_skeletons=self.import_skeletons,
                 import_animations=self.import_animations,
                 import_materials=self.import_materials,
@@ -773,7 +1065,7 @@ def _merge_import_results(target: ImportResult, source: ImportResult) -> None:
 
 
 class KZ2_OT_import_cached_entity(Operator):
-    """Import the selected cached entity from the configured PSARC."""
+    """Import the selected cached entity from the configured data source."""
 
     bl_idname = "kz2.import_cached_entity"
     bl_label = "Import Entity"
@@ -790,12 +1082,15 @@ class KZ2_OT_import_cached_entity(Operator):
             catalog = _current_catalog(context)
             if catalog is None:
                 raise FormatError(
-                    "Scan the configured PSARC before importing an entity"
+                    "Scan the configured data source before importing an entity"
                 )
             entity = _selected_entity(context, catalog)
             options = ImportOptions(
                 global_scale=context.scene.kz2_entity_scale,
                 flip_uv_v=context.scene.kz2_entity_flip_uv_v,
+                import_fake_shadow_meshes=(
+                    _addon_preferences(context).import_fake_shadow_meshes
+                ),
                 import_animations=context.scene.kz2_entity_animations,
                 import_materials=context.scene.kz2_entity_materials,
                 source_psarc=catalog.source_path,
@@ -932,6 +1227,9 @@ class KZ2_OT_import_level(Operator):
             options = ImportOptions(
                 global_scale=context.scene.kz2_level_scale,
                 flip_uv_v=context.scene.kz2_level_flip_uv_v,
+                import_fake_shadow_meshes=(
+                    _addon_preferences(context).import_fake_shadow_meshes
+                ),
                 import_animations=False,
                 import_materials=context.scene.kz2_level_materials,
                 import_level_entities=context.scene.kz2_level_entities,
@@ -998,13 +1296,15 @@ class KZ2_PT_tools(Panel):
                 )
             except OSError:
                 source_matches = False
-        if not source_matches:
+        if catalog is None or not source_matches:
             box = layout.box()
             box.label(
-                text="Configure the PSARC and scan assets once.",
+                text=(
+                    "Choose a retail data source, or scan this source once."
+                ),
                 icon="INFO",
             )
-            box.label(text="First scan may take several minutes.")
+            box.label(text="Retail PSARC/ISO caches load automatically.")
             box.label(text="External USB drives can be slower.")
             row = box.row(align=True)
             row.operator(
@@ -1401,9 +1701,21 @@ def register() -> None:
         soft_max=100.0,
     )
     bpy.types.TOPBAR_MT_file_import.append(_menu_import)
+    if (
+        _restore_persistent_preferences_after_load
+        not in bpy.app.handlers.load_post
+    ):
+        bpy.app.handlers.load_post.append(
+            _restore_persistent_preferences_after_load
+        )
+    _restore_persistent_preferences(reset_scene_selections=False)
 
 
 def unregister() -> None:
+    if _restore_persistent_preferences_after_load in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(
+            _restore_persistent_preferences_after_load
+        )
     bpy.types.TOPBAR_MT_file_import.remove(_menu_import)
     del bpy.types.Scene.kz2_entity_scale
     del bpy.types.Scene.kz2_entity_flip_uv_v

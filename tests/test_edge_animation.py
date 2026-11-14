@@ -126,9 +126,17 @@ class EdgeAnimationTests(unittest.TestCase):
     def test_sparse_packed_translation_decodes(self) -> None:
         clip = parse_ea02(animated_translation_clip(), source="animated.ea02")
         self.assertTrue(clip.decode_supported)
-        self.assertAlmostEqual(0.0, clip.sample_frame(0)[1].translation[0])
-        self.assertAlmostEqual(1.0 / 3.0, clip.sample_frame(1)[1].translation[0])
-        self.assertAlmostEqual(2.0 / 3.0, clip.sample_frame(2)[1].translation[0])
+        for frame, expected in enumerate((0.0, 1.0 / 3.0, 2.0 / 3.0)):
+            translation = clip.sample_frame(frame)[1].translation
+            assert translation is not None
+            self.assertAlmostEqual(expected, translation[0])
+        self.assertEqual(1, len(clip._frame_set_samples))
+        cached = next(iter(clip._frame_set_samples.values()))
+        clip.sample_frame(1)
+        self.assertIs(
+            cached,
+            next(iter(clip._frame_set_samples.values())),
+        )
 
     def test_section_size_mismatch_is_rejected(self) -> None:
         blob = bytearray(animated_translation_clip())

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import struct
 import unittest
+from unittest.mock import patch
 
+from io_scene_killzone2.kz2_assets import textures as texture_module
 from io_scene_killzone2.kz2_assets.core import CORE_SIGNATURE, CoreFile
 from io_scene_killzone2.kz2_assets.decoder import CoreDecoder
 from io_scene_killzone2.kz2_assets.model import (
@@ -195,6 +197,31 @@ class TextureTests(unittest.TestCase):
         self.assertEqual(0.0, pixels[7])
         self.assertAlmostEqual(6.0 / 7.0, pixels[11])
         self.assertAlmostEqual(1.0 / 7.0, pixels[31])
+
+    @unittest.skipUnless(
+        texture_module._numpy is not None,
+        "requires NumPy acceleration",
+    )
+    def test_numpy_s3tc_matches_python_fallback(self) -> None:
+        for pixel_format, block_size in (
+            (TextureFormat.S3TC1, 8),
+            (TextureFormat.S3TC3, 16),
+            (TextureFormat.S3TC5, 16),
+        ):
+            payload = bytes(
+                (index * 37 + 11) & 0xFF
+                for index in range(4 * block_size)
+            )
+            texture = make_texture(
+                pixel_format,
+                7,
+                5,
+                payload,
+            )
+            accelerated = decode_texture_surface(texture).pixels
+            with patch.object(texture_module, "_numpy", None):
+                fallback = decode_texture_surface(texture).pixels
+            self.assertEqual(accelerated.tobytes(), fallback.tobytes())
 
     def test_big_endian_half_float_ramp(self) -> None:
         payload = b"".join(

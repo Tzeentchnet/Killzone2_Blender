@@ -128,7 +128,7 @@ class BlenderBuilderTests(unittest.TestCase):
             vertex(bone_indices=(2, 9, 0), weights=(1.0, 0.5, 0.0)),
         )
         result = self.import_scene.ImportResult()
-        self.import_scene._add_skin_weights(
+        weighted_bones = self.import_scene._add_skin_weights(
             obj,
             vertices,
             types.SimpleNamespace(bone_names=("a", "b", "c")),
@@ -144,8 +144,14 @@ class BlenderBuilderTests(unittest.TestCase):
         self.assertEqual({"a": 0.5, "b": 0.25, "c": 0.25}, weights(0))
         self.assertEqual({"b": 0.75}, weights(1))
         self.assertEqual({"c": 1.0}, weights(2))
+        self.assertEqual({"a", "b", "c"}, weighted_bones)
         self.assertEqual(1, len(result.warnings))
         self.assertIn("[9]", result.warnings[0])
+
+    def test_fake_shadow_mesh_import_is_disabled_by_default(self) -> None:
+        self.assertFalse(
+            self.import_scene.ImportOptions().import_fake_shadow_meshes
+        )
 
     def test_action_joint_mismatch_fails_before_creating_data(self) -> None:
         armature = bpy.data.objects.new("rig", bpy.data.armatures.new("rig"))

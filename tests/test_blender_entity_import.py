@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import unittest
+from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -23,6 +24,132 @@ class BlenderEntityImportTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         bpy.ops.wm.read_factory_settings(use_empty=True)
+
+    def assert_tank_material_profiles(
+        self,
+        expected: dict[
+            str,
+            tuple[str, str | None, str | None, str, str | None],
+        ],
+    ) -> None:
+        materials_by_shader: dict[str, list] = {}
+        for material in bpy.data.materials:
+            shader_id = material.get("kz2_shader_object_id")
+            if shader_id in expected:
+                materials_by_shader.setdefault(shader_id, []).append(material)
+
+        self.assertEqual(set(expected), set(materials_by_shader))
+        for shader_id, materials in materials_by_shader.items():
+            (
+                profile_id,
+                normal_sampler,
+                detail_normal_sampler,
+                material_sampler,
+                secondary_base_color_sampler,
+            ) = expected[shader_id]
+            for material in materials:
+                with self.subTest(
+                    material=material.name,
+                    shader_id=shader_id,
+                ):
+                    self.assertEqual(
+                        profile_id,
+                        material["kz2_profile_id"],
+                    )
+                    nodes = material.node_tree.nodes
+                    principled = next(
+                        node
+                        for node in nodes
+                        if node.bl_idname == "ShaderNodeBsdfPrincipled"
+                    )
+                    self.assertTrue(
+                        principled.inputs["Roughness"].is_linked
+                    )
+                    self.assertEqual(
+                        "KZ2_Roughness",
+                        principled.inputs["Roughness"]
+                        .links[0]
+                        .from_node.name,
+                    )
+                    material_texture = (
+                        nodes["KZ2_MaterialChannels"]
+                        .inputs["Color"]
+                        .links[0]
+                        .from_node
+                    )
+                    self.assertEqual(
+                        material_sampler,
+                        material_texture["kz2_sampler"],
+                    )
+                    self.assertEqual(
+                        "Non-Color",
+                        material_texture.image.colorspace_settings.name,
+                    )
+                    if normal_sampler is not None:
+                        self.assertTrue(
+                            principled.inputs["Normal"].is_linked
+                        )
+                        normal_texture = (
+                            nodes["KZ2_NormalChannels"]
+                            .inputs["Color"]
+                            .links[0]
+                            .from_node
+                        )
+                        self.assertEqual(
+                            normal_sampler,
+                            normal_texture["kz2_sampler"],
+                        )
+                        self.assertEqual(
+                            "Non-Color",
+                            normal_texture.image.colorspace_settings.name,
+                        )
+                    if detail_normal_sampler is not None:
+                        detail_texture = next(
+                            node
+                            for node in nodes
+                            if node.get("kz2_sampler")
+                            == detail_normal_sampler
+                        )
+                        self.assertEqual(
+                            "detail normal",
+                            detail_texture["kz2_profile_role"],
+                        )
+                        self.assertFalse(
+                            detail_texture.outputs["Color"].is_linked
+                        )
+                        self.assertEqual(
+                            "retained unconnected",
+                            material["kz2_preview_detail_normal"],
+                        )
+                    if secondary_base_color_sampler is not None:
+                        base_color_mix = nodes[
+                            "KZ2_BaseColorMultiply"
+                        ]
+                        self.assertEqual(
+                            "MULTIPLY",
+                            base_color_mix.blend_type,
+                        )
+                        self.assertEqual(
+                            base_color_mix,
+                            principled.inputs["Base Color"]
+                            .links[0]
+                            .from_node,
+                        )
+                        secondary_texture = (
+                            base_color_mix.inputs["Color2"]
+                            .links[0]
+                            .from_node
+                        )
+                        self.assertEqual(
+                            secondary_base_color_sampler,
+                            secondary_texture["kz2_sampler"],
+                        )
+                        secondary_uv = (
+                            secondary_texture.inputs["Vector"]
+                            .links[0]
+                            .from_node
+                        )
+                        self.assertEqual("UV0", secondary_uv.uv_map)
 
     def test_dropship_imports_attached_turrets_and_profiled_material(
         self,
@@ -380,6 +507,479 @@ class BlenderEntityImportTests(unittest.TestCase):
             all(
                 {"UV0", "DiffuseUV"}.issubset(obj.data.uv_layers.keys())
                 for obj in profiled_meshes
+            )
+        )
+
+    @unittest.skipUnless(
+        os.environ.get("KZ2_EXHAUSTIVE_E2E") == "1",
+        "requires KZ2_EXHAUSTIVE_E2E=1",
+    )
+    def test_hgh_tank_imports_destructibility_hull_and_cupola(self) -> None:
+        from io_scene_killzone2.import_scene import (
+            ImportOptions,
+            import_psarc_entity,
+        )
+
+        archive_path = str(Path(os.environ["KZ2_PSARC"]).resolve())
+        core_path = (
+            "LocalCachePS3/lumps/"
+            "levels.single_player.corinth_river.section_06_dam."
+            "assets_optimized_damgp_scriptedweaponartillery_isatank_"
+            "hghtank_damart.core"
+        )
+
+        result = import_psarc_entity(
+            bpy.context,
+            archive_path,
+            core_path,
+            8393,
+            ImportOptions(
+                source_psarc=archive_path,
+                resource_index_path=os.environ.get(
+                    "KZ2_RESOURCE_INDEX",
+                    "",
+                ),
+                import_materials=True,
+                import_animations=True,
+                flip_uv_v=True,
+            ),
+        )
+
+        meshes = [
+            obj for obj in bpy.data.objects if obj.type == "MESH"
+        ]
+        part_meshes = [
+            obj
+            for obj in meshes
+            if "kz2_destructibility_part_id" in obj
+        ]
+        child_entities = [
+            obj
+            for obj in bpy.data.objects
+            if obj.get("kz2_child_entity")
+        ]
+        actions = list(bpy.data.actions)
+        self.assertEqual(53, result.meshes)
+        self.assertEqual(2, result.armatures)
+        self.assertEqual(40, result.actions)
+        self.assertEqual(2, result.entity_instances)
+        self.assertEqual(53, len(meshes))
+        self.assertEqual(42, len(part_meshes))
+        self.assertEqual(
+            {
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+            },
+            {
+                int(obj["kz2_destructibility_part_id"])
+                for obj in part_meshes
+            },
+        )
+        self.assertNotIn(
+            10292,
+            {
+                int(obj["kz2_mesh_object_index"])
+                for obj in meshes
+                if "kz2_mesh_object_index" in obj
+            },
+        )
+        rigid_track = next(
+            obj
+            for obj in meshes
+            if obj.get("kz2_mesh_object_index") == 613
+        )
+        self.assertEqual("ARMATURE", rigid_track.parent.type)
+        self.assertEqual("BONE", rigid_track.parent_type)
+        self.assertEqual(
+            "wheel5_right_suspension",
+            rigid_track.parent_bone,
+        )
+        self.assertTrue(
+            rigid_track["kz2_destructibility_bone_inferred"]
+        )
+        before = rigid_track.matrix_world.translation.copy()
+        rigid_track.parent.pose.bones[
+            rigid_track.parent_bone
+        ].location.x += 0.5
+        bpy.context.view_layer.update()
+        self.assertGreater(
+            (rigid_track.matrix_world.translation - before).length,
+            0.1,
+        )
+        self.assertEqual(40, len(actions))
+        self.assertTrue(
+            all(
+                action.use_frame_range
+                and action.frame_start == 1.0
+                and action.frame_end >= action.frame_start
+                for action in actions
+            )
+        )
+        self.assertEqual(
+            {
+                "HGH_Tank": 21,
+                "HGH_M1_LMG_Mounted": 19,
+            },
+            Counter(
+                action.get("kz2_entity_name")
+                for action in actions
+            ),
+        )
+        self.assertEqual(
+            {
+                "Skeleton_11070": 21,
+                "Skeleton_11067": 19,
+            },
+            Counter(
+                action.get("kz2_target_armature")
+                for action in actions
+            ),
+        )
+        self.assertEqual(
+            ["HGH_M1_LMG_Mounted"],
+            [obj.name for obj in child_entities],
+        )
+        self.assertEqual("ARMATURE", child_entities[0].parent.type)
+        self.assertEqual("BONE", child_entities[0].parent_type)
+        self.assertEqual("gunner_bone", child_entities[0].parent_bone)
+        self.assertEqual(
+            "Gunner_Bone",
+            child_entities[0]["kz2_attachment_target_name"],
+        )
+        self.assert_tank_material_profiles(
+            {
+                "37118f7b07d5263cfeee4f6d6b6a7ba4": (
+                    "hgh_tank_layered_deferred",
+                    "inSampler3",
+                    "inSampler4",
+                    "inSampler1",
+                    None,
+                ),
+                "90f8c2677ed634533711eb2bfed57af0": (
+                    "hgh_tank_layered_deferred",
+                    "inSampler3",
+                    "inSampler4",
+                    "inSampler1",
+                    None,
+                ),
+                "6cf769273cef73fc83c4b5f780adfebc": (
+                    "hgh_tank_layered_deferred",
+                    "inSampler3",
+                    "inSampler4",
+                    "inSampler1",
+                    None,
+                ),
+                "e03466b9264b1c8a6e663a39cb0f511e": (
+                    "hgh_tank_track_deferred",
+                    "inSampler4",
+                    None,
+                    "inSampler2",
+                    "inSampler1",
+                ),
+                "b0a8b52eb0560707ecc42dc8c1ec7f88": (
+                    "hgh_tank_compact_deferred",
+                    "inSampler2",
+                    None,
+                    "inSampler1",
+                    None,
+                ),
+                "a58e7b007d4d88e2ddfaa61af86a4ab7": (
+                    "hgh_tank_packed_g49",
+                    None,
+                    None,
+                    "inSampler1",
+                    None,
+                ),
+                "5c879214cf2789ce4728d5de9d9cbc16": (
+                    "hgh_tank_packed_r49",
+                    None,
+                    None,
+                    "inSampler1",
+                    None,
+                ),
+            }
+        )
+        self.assertEqual(2, len(result.warnings))
+        self.assertTrue(
+            all(
+                "scalar/user channels" in warning
+                for warning in result.warnings
+            )
+        )
+
+    @unittest.skipUnless(
+        os.environ.get("KZ2_EXHAUSTIVE_E2E") == "1",
+        "requires KZ2_EXHAUSTIVE_E2E=1",
+    )
+    def test_hgh_tank_fake_shadow_preference_restores_mesh(self) -> None:
+        from io_scene_killzone2.import_scene import (
+            ImportOptions,
+            import_psarc_entity,
+        )
+
+        archive_path = str(Path(os.environ["KZ2_PSARC"]).resolve())
+        core_path = (
+            "LocalCachePS3/lumps/"
+            "levels.single_player.corinth_river.section_06_dam."
+            "assets_optimized_damgp_scriptedweaponartillery_isatank_"
+            "hghtank_damart.core"
+        )
+
+        result = import_psarc_entity(
+            bpy.context,
+            archive_path,
+            core_path,
+            8393,
+            ImportOptions(
+                source_psarc=archive_path,
+                resource_index_path=os.environ.get(
+                    "KZ2_RESOURCE_INDEX",
+                    "",
+                ),
+                import_fake_shadow_meshes=True,
+                import_materials=False,
+                import_animations=False,
+            ),
+        )
+
+        fake_shadow = next(
+            obj
+            for obj in bpy.data.objects
+            if obj.get("kz2_mesh_object_index") == 10292
+        )
+        self.assertEqual(54, result.meshes)
+        self.assertTrue(fake_shadow["kz2_fake_shadow_mesh"])
+        self.assertEqual(99, fake_shadow["kz2_destructibility_part_id"])
+
+    @unittest.skipUnless(
+        os.environ.get("KZ2_EXHAUSTIVE_E2E") == "1",
+        "requires KZ2_EXHAUSTIVE_E2E=1",
+    )
+    def test_isa_tank_imports_initial_tracks_and_body_parts(self) -> None:
+        from io_scene_killzone2.import_scene import (
+            ImportOptions,
+            import_psarc_entity,
+        )
+
+        archive_path = str(Path(os.environ["KZ2_PSARC"]).resolve())
+        core_path = (
+            "LocalCachePS3/lumps/"
+            "levels.single_player.corinth_river.section_06_dam."
+            "assets_optimized_damgp_scriptedweaponartillery_isatank_"
+            "hghtank_damart.core"
+        )
+
+        result = import_psarc_entity(
+            bpy.context,
+            archive_path,
+            core_path,
+            8392,
+            ImportOptions(
+                source_psarc=archive_path,
+                resource_index_path=os.environ.get(
+                    "KZ2_RESOURCE_INDEX",
+                    "",
+                ),
+                import_materials=True,
+                import_animations=True,
+                flip_uv_v=True,
+            ),
+        )
+
+        meshes = [
+            obj for obj in bpy.data.objects if obj.type == "MESH"
+        ]
+        armatures = {
+            obj.name: obj
+            for obj in bpy.data.objects
+            if obj.type == "ARMATURE"
+        }
+        actions = list(bpy.data.actions)
+        self.assertEqual(63, result.meshes)
+        self.assertEqual(2, result.armatures)
+        self.assertEqual(54, result.actions)
+        self.assertEqual(2, result.entity_instances)
+        self.assertEqual(63, len(meshes))
+        self.assertNotIn(
+            10317,
+            {
+                int(obj["kz2_mesh_object_index"])
+                for obj in meshes
+                if "kz2_mesh_object_index" in obj
+            },
+        )
+        self.assertEqual(
+            {
+                "Skeleton_11068": "ISA_Tank",
+                "Skeleton_90": "ISA_Tank_LMG_Mounted",
+            },
+            {
+                name: armature["kz2_armature_owner"]
+                for name, armature in armatures.items()
+            },
+        )
+        self.assertTrue(
+            {
+                "thread",
+                "body",
+                "turret",
+                "rack_bone",
+                "Launcher1_Right",
+                "wheel2_right_track",
+                "Tank_Camera_Joint",
+            }.issubset(armatures["Skeleton_11068"].data.bones.keys())
+        )
+        body_parts = [
+            obj
+            for obj in meshes
+            if obj.get("kz2_destructibility_bone") == "Body"
+        ]
+        self.assertEqual(16, len(body_parts))
+        self.assertTrue(
+            all(
+                obj.parent == armatures["Skeleton_11068"]
+                and obj.parent_type == "BONE"
+                and obj.parent_bone == "body"
+                and obj["kz2_destructibility_bone_attached"]
+                and obj["kz2_destructibility_parent_bone"] == "body"
+                and obj.matrix_world.translation.length > 0.5
+                for obj in body_parts
+            )
+        )
+        for mesh_index in (631, 653, 698):
+            part = next(
+                obj
+                for obj in meshes
+                if obj.get("kz2_mesh_object_index") == mesh_index
+            )
+            self.assertEqual("body", part.parent_bone)
+            self.assertGreater(part.matrix_world.translation.length, 0.5)
+        track_expectations = {
+            10301: (6, "LeftTrackInitialState", "Track_Left"),
+            10303: (7, "RightTrackInitialState", "Track_Right"),
+        }
+        for mesh_index, expected in track_expectations.items():
+            tracks = [
+                obj
+                for obj in meshes
+                if obj.get("kz2_mesh_object_index") == mesh_index
+            ]
+            self.assertEqual(2, len(tracks))
+            self.assertEqual(
+                {"P00", "P01"},
+                {obj.name.rsplit("_", 1)[-1] for obj in tracks},
+            )
+            self.assertTrue(
+                all(
+                    (
+                        obj["kz2_destructibility_part_id"],
+                        obj["kz2_destructibility_state_name"],
+                        obj["kz2_destructibility_model_part_name"],
+                    )
+                    == expected
+                    for obj in tracks
+                )
+            )
+        self.assertEqual(
+            {
+                "ISA_Tank": 36,
+                "ISA_Tank_LMG_Mounted": 18,
+            },
+            Counter(
+                action.get("kz2_entity_name")
+                for action in actions
+            ),
+        )
+        self.assertEqual(
+            {
+                "Skeleton_11068": 36,
+                "Skeleton_90": 18,
+            },
+            Counter(
+                action.get("kz2_target_armature")
+                for action in actions
+            ),
+        )
+        self.assertTrue(
+            all(
+                action.use_frame_range
+                and action.frame_start == 1.0
+                and action.frame_end >= action.frame_start
+                for action in actions
+            )
+        )
+        self.assert_tank_material_profiles(
+            {
+                "c4de041dda84841306f1f2921c995c89": (
+                    "isa_tank_layered_deferred",
+                    "inSampler2",
+                    "inSampler3",
+                    "inSampler1",
+                    None,
+                ),
+                "7a83011fface8f01eca0b3604fb22f5a": (
+                    "isa_tank_layered_deferred",
+                    "inSampler2",
+                    "inSampler3",
+                    "inSampler1",
+                    None,
+                ),
+                "710036fa5d9aaddd90279f934e1c7275": (
+                    "isa_tank_layered_deferred",
+                    "inSampler2",
+                    "inSampler3",
+                    "inSampler1",
+                    None,
+                ),
+                "0a1b584d6a258c6dc25610e3289d5406": (
+                    "isa_tank_layered_deferred",
+                    "inSampler2",
+                    "inSampler3",
+                    "inSampler1",
+                    None,
+                ),
+                "ef5c0a58695ab51ed3bd2e44d1ea0c91": (
+                    "isa_tank_layered_deferred",
+                    "inSampler2",
+                    "inSampler3",
+                    "inSampler1",
+                    None,
+                ),
+                "2283f987591d17d65f60db32222736bb": (
+                    "isa_tank_track_deferred",
+                    "inSampler3",
+                    None,
+                    "inSampler2",
+                    "inSampler1",
+                ),
+                "d8de6701c66b7caece3b70e3555b198b": (
+                    "isa_tank_compact_deferred",
+                    "inSampler2",
+                    None,
+                    "inSampler1",
+                    None,
+                ),
+            }
+        )
+        self.assertEqual(2, len(result.warnings))
+        self.assertTrue(
+            all(
+                "scalar/user channels" in warning
+                for warning in result.warnings
             )
         )
 

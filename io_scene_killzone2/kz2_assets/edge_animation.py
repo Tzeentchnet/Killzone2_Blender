@@ -6,7 +6,7 @@ import bisect
 import itertools
 import math
 import struct
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, cast
 
 from .binary import BinaryReader, BitReader
@@ -81,6 +81,20 @@ class JointSample:
     scale: Vector3 | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _AnimatedChannelSamples:
+    key_frames: tuple[int, ...]
+    values: tuple[tuple[float, ...], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _FrameSetSamples:
+    groups: dict[
+        ChannelKind,
+        tuple[_AnimatedChannelSamples, ...],
+    ]
+
+
 @dataclass(slots=True)
 class EdgeAnimation:
     source: str
@@ -102,6 +116,12 @@ class EdgeAnimation:
     locomotion_delta: JointSample | None = None
     decode_supported: bool = False
     unsupported_reason: str = ""
+    _frame_set_samples: dict[FrameSet, _FrameSetSamples] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def sample_frame(self, frame: int) -> tuple[JointSample, ...]:
         if not self.decode_supported:
@@ -132,21 +152,13 @@ class EdgeAnimation:
             for kind in TRANSFORM_KINDS
         ):
             frame_set, local_integer, fraction = self._locate_frame(frame)
-            layout = _FrameSetLayout.parse(
-                self.blob,
-                frame_set,
-                sum(len(self.channel_tables[kind]) for kind in self.channel_tables),
-                self.source,
-            )
-            bit_base_by_kind = self._intra_bit_bases(frame_set.intra_frame_count)
+            frame_samples = self._samples_for_frame_set(frame_set)
             for kind in TRANSFORM_KINDS:
                 values = self._sample_animated_group(
                     kind,
-                    frame_set,
-                    layout,
+                    frame_samples,
                     local_integer,
                     fraction,
-                    bit_base_by_kind[kind],
                 )
                 for joint_index, value in zip(
                     self.channel_tables[kind],
@@ -178,145 +190,145 @@ class EdgeAnimation:
             return frame_set, frame_set.intra_frame_count, 1.0
         return frame_set, local, 0.0
 
-    def _intra_bit_bases(self, intra_count: int) -> dict[ChannelKind, int]:
-        result: dict[ChannelKind, int] = {}
-        cursor = 0
+    def _samples_for_frame_set(
+        self,
+        frame_set: FrameSet,
+    ) -> _FrameSetSamples:
+        cached = self._frame_set_samples.get(frame_set)
+        if cached is not None:
+            return cached
+        layout = _FrameSetLayout.parse(
+            self.blob,
+            frame_set,
+            sum(
+                len(self.channel_tables[kind])
+                for kind in self.channel_tables
+            ),
+            self.source,
+        )
+        groups: dict[
+            ChannelKind,
+            tuple[_AnimatedChannelSamples, ...],
+        ] = {}
+        bitmap_base = 0
         for kind in CHANNEL_KINDS:
-            result[kind] = cursor
-            cursor += len(self.channel_tables[kind]) * intra_count
-        return result
+            channels = self.channel_tables[kind]
+            if kind not in TRANSFORM_KINDS:
+                bitmap_base += (
+                    len(channels) * frame_set.intra_frame_count
+                )
+                continue
+            specs = self.animated_specs[kind]
+            initial_bit_offset = 0
+            intra_bit_offset = 0
+            final_bit_offset = 0
+            group_samples = []
+            for channel_index, spec in enumerate(specs):
+                channel_bitmap_offset = (
+                    bitmap_base
+                    + channel_index * frame_set.intra_frame_count
+                )
+                enabled_positions = tuple(
+                    index
+                    for index in range(frame_set.intra_frame_count)
+                    if _get_bit(
+                        self.blob,
+                        layout.intra_bits,
+                        channel_bitmap_offset + index,
+                    )
+                )
+                values = [
+                    _decode_packed_key(
+                        self.blob,
+                        layout.initial[kind] * 8 + initial_bit_offset,
+                        spec,
+                        rotation=kind == "rotation",
+                        source=self.source,
+                    )
+                ]
+                values.extend(
+                    _decode_packed_key(
+                        self.blob,
+                        (
+                            layout.intra[kind] * 8
+                            + intra_bit_offset
+                            + key_index * spec.key_bits
+                        ),
+                        spec,
+                        rotation=kind == "rotation",
+                        source=self.source,
+                    )
+                    for key_index in range(len(enabled_positions))
+                )
+                values.append(
+                    _decode_packed_key(
+                        self.blob,
+                        layout.final[kind] * 8 + final_bit_offset,
+                        spec,
+                        rotation=kind == "rotation",
+                        source=self.source,
+                    )
+                )
+                group_samples.append(
+                    _AnimatedChannelSamples(
+                        key_frames=(
+                            0,
+                            *(index + 1 for index in enabled_positions),
+                            frame_set.intra_frame_count + 1,
+                        ),
+                        values=tuple(values),
+                    )
+                )
+                initial_bit_offset += spec.key_bits
+                intra_bit_offset += (
+                    len(enabled_positions) * spec.key_bits
+                )
+                final_bit_offset += spec.key_bits
+            groups[kind] = tuple(group_samples)
+            bitmap_base += len(channels) * frame_set.intra_frame_count
+        cached = _FrameSetSamples(groups)
+        self._frame_set_samples[frame_set] = cached
+        return cached
 
     def _sample_animated_group(
         self,
         kind: ChannelKind,
-        frame_set: FrameSet,
-        layout: _FrameSetLayout,
+        frame_samples: _FrameSetSamples,
         frame_integer: int,
         frame_fraction: float,
-        group_bit_base: int,
     ) -> tuple[tuple[float, ...], ...]:
-        channels = self.channel_tables[kind]
-        specs = self.animated_specs[kind]
-        enabled_counts = tuple(
-            _count_bits(
-                self.blob,
-                layout.intra_bits,
-                group_bit_base + index * frame_set.intra_frame_count,
-                frame_set.intra_frame_count,
-            )
-            for index in range(len(channels))
-        )
         results = []
-        for channel_index in range(len(channels)):
-            bit_offset = group_bit_base + channel_index * frame_set.intra_frame_count
-            enabled_for_channel = enabled_counts[channel_index]
-            enabled_before_frame = _count_bits(
-                self.blob,
-                layout.intra_bits,
-                bit_offset,
-                frame_integer,
+        for channel in frame_samples.groups[kind]:
+            left_index = max(
+                0,
+                bisect.bisect_right(
+                    channel.key_frames,
+                    frame_integer,
+                )
+                - 1,
             )
-
-            previous = _last_set_bit(
-                self.blob,
-                layout.intra_bits,
-                bit_offset,
-                frame_integer,
+            right_index = min(
+                left_index + 1,
+                len(channel.key_frames) - 1,
             )
-            following = _first_set_bit(
-                self.blob,
-                layout.intra_bits,
-                bit_offset + frame_integer,
-                frame_set.intra_frame_count - frame_integer,
-            )
-            left_distance = frame_integer - (previous + 1 if previous is not None else 0)
-            right_distance = (
-                following + 1
-                if following is not None
-                else frame_set.intra_frame_count - frame_integer + 1
-            )
-            denominator = left_distance + right_distance
+            left_frame = channel.key_frames[left_index]
+            right_frame = channel.key_frames[right_index]
+            denominator = right_frame - left_frame
             alpha = (
-                (left_distance + frame_fraction) / denominator
+                (frame_integer + frame_fraction - left_frame)
+                / denominator
                 if denominator
                 else 0.0
             )
-
-            initial = self._decode_group_key(
-                kind,
-                layout.initial[kind],
-                channel_index,
-                specs,
-            )
-            final = self._decode_group_key(
-                kind,
-                layout.final[kind],
-                channel_index,
-                specs,
-            )
-            if enabled_before_frame == 0:
-                left = initial
-            else:
-                left = self._decode_intra_key(
+            results.append(
+                _interpolate(
                     kind,
-                    layout.intra[kind],
-                    channel_index,
-                    enabled_before_frame - 1,
-                    enabled_counts,
-                    specs,
+                    channel.values[left_index],
+                    channel.values[right_index],
+                    alpha,
                 )
-            if enabled_before_frame == enabled_for_channel:
-                right = final
-            else:
-                right = self._decode_intra_key(
-                    kind,
-                    layout.intra[kind],
-                    channel_index,
-                    enabled_before_frame,
-                    enabled_counts,
-                    specs,
-                )
-            results.append(_interpolate(kind, left, right, alpha))
+            )
         return tuple(results)
-
-    def _decode_group_key(
-        self,
-        kind: ChannelKind,
-        data_offset: int,
-        channel_index: int,
-        specs: tuple[PackingSpec, ...],
-    ) -> tuple[float, ...]:
-        preceding_bits = sum(spec.key_bits for spec in specs[:channel_index])
-        return _decode_packed_key(
-            self.blob,
-            data_offset * 8 + preceding_bits,
-            specs[channel_index],
-            rotation=kind == "rotation",
-            source=self.source,
-        )
-
-    def _decode_intra_key(
-        self,
-        kind: ChannelKind,
-        data_offset: int,
-        channel_index: int,
-        channel_key_index: int,
-        enabled_counts: tuple[int, ...],
-        specs: tuple[PackingSpec, ...],
-    ) -> tuple[float, ...]:
-        spec = specs[channel_index]
-        bit_offset = sum(
-            enabled_counts[index] * specs[index].key_bits
-            for index in range(channel_index)
-        )
-        bit_offset += channel_key_index * spec.key_bits
-        return _decode_packed_key(
-            self.blob,
-            data_offset * 8 + bit_offset,
-            spec,
-            rotation=kind == "rotation",
-            source=self.source,
-        )
 
 
 @dataclass(frozen=True, slots=True)

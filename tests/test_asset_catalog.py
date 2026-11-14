@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import struct
 import tempfile
 import unittest
@@ -19,6 +20,7 @@ from io_scene_killzone2.kz2_assets.asset_catalog import (
     cached_entity_category,
     cached_entity_source_label,
     filter_cached_entity_indices,
+    materialize_bundled_asset_catalog,
     scan_entity_asset_catalog,
 )
 from io_scene_killzone2.kz2_assets.core import CORE_SIGNATURE
@@ -176,9 +178,7 @@ class EntityAssetCatalogTests(unittest.TestCase):
             )
             resource_index = ResourceIndex(
                 index_path,
-                source_path=path,
-                source_size=catalog.source_size,
-                source_mtime_ns=catalog.source_mtime_ns,
+                source_fingerprint=catalog.source_fingerprint,
             )
             definitions = resource_index.definitions({entity.object_id})
             self.assertEqual(1, len(definitions))
@@ -223,11 +223,59 @@ class EntityAssetCatalogTests(unittest.TestCase):
         ):
             EntityAssetCatalog.from_json('{"cache_version":999}')
 
+    def test_materializes_bundled_cache_for_matching_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source_path = root / "source.psarc"
+            copied_path = root / "copy.psarc"
+            mismatched_path = root / "mismatched.psarc"
+            index_path = root / "resources.sqlite3"
+            logical_path = "LocalCachePS3/lumps/cached_entity.core"
+            build_archive(
+                source_path,
+                logical_path,
+                synthetic_entity_core(),
+            )
+            catalog = scan_entity_asset_catalog(
+                source_path,
+                resource_index_path=index_path,
+            )
+            shutil.copyfile(source_path, copied_path)
+
+            materialized = materialize_bundled_asset_catalog(
+                copied_path,
+                catalog.to_json(),
+                index_path,
+            )
+
+            self.assertEqual(str(copied_path.resolve()), materialized.source_path)
+            self.assertEqual(
+                catalog.source_fingerprint,
+                materialized.source_fingerprint,
+            )
+            self.assertTrue(materialized.matches_source(copied_path))
+
+            build_archive(
+                mismatched_path,
+                logical_path,
+                synthetic_entity_core() + bytes(257),
+            )
+            with self.assertRaisesRegex(
+                FormatError,
+                "does not match the bundled retail asset cache",
+            ):
+                materialize_bundled_asset_catalog(
+                    mismatched_path,
+                    catalog.to_json(),
+                    index_path,
+                )
+
     def test_round_trips_level_hierarchy_and_rejects_v2_cache(self) -> None:
         catalog = EntityAssetCatalog(
             source_path=r"C:\retail\data_ps3.psarc",
             source_size=123,
             source_mtime_ns=456,
+            source_fingerprint="12" * 32,
             resource_index_path=r"C:\cache\resources.sqlite3",
             entities=(),
             levels=(

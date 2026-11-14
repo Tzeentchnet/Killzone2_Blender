@@ -269,6 +269,17 @@ class MaterialBuilder:
                 if preview_profile.normal_y_flip is None
                 else preview_profile.normal_y_flip
             )
+        if preview_profile.detail_normal_sampler is not None:
+            material["kz2_profile_detail_normal_sampler"] = (
+                preview_profile.detail_normal_sampler
+            )
+            material["kz2_preview_detail_normal"] = (
+                "retained unconnected"
+            )
+        if preview_profile.secondary_base_color_sampler is not None:
+            material["kz2_profile_secondary_base_color_sampler"] = (
+                preview_profile.secondary_base_color_sampler
+            )
         if preview_profile.material_sampler is not None:
             material["kz2_profile_material_sampler"] = (
                 preview_profile.material_sampler
@@ -307,6 +318,10 @@ class MaterialBuilder:
         base_color_binding_index = None
         base_color_sampler = None
         base_color_uv_map = "DiffuseUV"
+        secondary_base_color_output = None
+        secondary_base_color_binding_index = None
+        secondary_base_color_sampler = None
+        secondary_base_color_uv_map = "UV0"
         lightmap_binding_index = None
         lightmap_is_resolved = False
         texture_nodes = {}
@@ -391,6 +406,17 @@ class MaterialBuilder:
                 )
                 material["kz2_preview_uv_map"] = base_color_uv_map
             if (
+                preview_profile.secondary_base_color_sampler
+                == binding.sampler
+                and node.image is not None
+            ):
+                secondary_base_color_output = node.outputs["Color"]
+                secondary_base_color_binding_index = binding_index
+                secondary_base_color_sampler = binding.sampler
+                secondary_base_color_uv_map = (
+                    preview_profile.secondary_base_color_uv_map
+                )
+            if (
                 preview_profile.opacity_sampler == binding.sampler
                 and node.image is not None
             ):
@@ -415,6 +441,27 @@ class MaterialBuilder:
                         "marked sRGB; preserving the exceptional source "
                         "metadata"
                     )
+
+        if (
+            base_color_output is not None
+            and secondary_base_color_output is not None
+        ):
+            base_color_mix = nodes.new("ShaderNodeMixRGB")
+            base_color_mix.name = "KZ2_BaseColorMultiply"
+            base_color_mix.label = "Shader profile: base * secondary"
+            base_color_mix.blend_type = "MULTIPLY"
+            base_color_mix.inputs["Fac"].default_value = 1.0
+            base_color_mix.location = (100.0, 100.0)
+            node_tree.links.new(
+                base_color_output,
+                base_color_mix.inputs["Color1"],
+            )
+            node_tree.links.new(
+                secondary_base_color_output,
+                base_color_mix.inputs["Color2"],
+            )
+            base_color_output = base_color_mix.outputs["Color"]
+            material["kz2_preview_base_color_combine"] = "multiply"
 
         self._connect_profile_normal(
             nodes,
@@ -443,6 +490,18 @@ class MaterialBuilder:
                 base_color_sampler,
                 uv_map=base_color_uv_map,
                 flip_v=preview_profile.flip_diffuse_v,
+            )
+        if (
+            secondary_base_color_binding_index is not None
+            and secondary_base_color_sampler is not None
+        ):
+            self._connect_diffuse_coordinates(
+                nodes,
+                node_tree,
+                secondary_base_color_binding_index,
+                secondary_base_color_sampler,
+                uv_map=secondary_base_color_uv_map,
+                flip_v=False,
             )
         indirect_light_output = None
         if lightmap_binding_index is not None:

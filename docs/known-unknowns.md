@@ -68,8 +68,11 @@ that are merely framed from interpretations that affect Blender output.
 - General semantics for shader-variable types outside the float-like types
   currently exposed.
 - Compiled `SHO` instruction semantics outside targeted shader research.
-- Full normal signs, packed material channels, response-ramp coordinates,
-  emissive effects, IBL, and secondary detail-layer arithmetic.
+- Normal signs and packed material channels outside the exact shader
+  profiles, plus response-ramp coordinates, emissive effects, IBL, and
+  detail-normal composition. The HGH/ISA tank detail samplers and their
+  per-sample scaling are identified, but their complete Blender-equivalent
+  combination is not yet mapped.
 
 ### Levels and entities
 

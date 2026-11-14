@@ -36,6 +36,7 @@ def local_reference(index: int | None) -> bytes:
 def synthetic_entity_core(
     *,
     destructibility_layout: tuple[int, int] = (90, 86),
+    damage_pass_ons: tuple[tuple[int, float], ...] = (),
     entity_type: bytes = b"EntityResource",
     child_indices: tuple[int, ...] = (),
 ) -> bytes:
@@ -60,13 +61,19 @@ def synthetic_entity_core(
     )
     part_prefix = (
         struct.pack(">iBff", 0, 1, 10.0, 0.0)
-        + compact(0)
+        + compact(len(damage_pass_ons))
+        + b"".join(
+            struct.pack(">if", part_id, multiplier)
+            for part_id, multiplier in damage_pass_ons
+        )
         + struct.pack(">H", 5)
         + struct.pack(">i", 10)
         + identity_matrix
         + local_reference(None)
     )
-    part_prefix += bytes(destructibility_layout[1] - len(part_prefix))
+    part_prefix += bytes(
+        max(0, destructibility_layout[1] - len(part_prefix))
+    )
     types = (
         entity_type,
         b"StaticModelResource",
@@ -335,6 +342,24 @@ class EntityTests(unittest.TestCase):
                 for reference in destructibility.part_states
             ),
         )
+        self.assertTrue(destructibility.part_states_complete)
+
+    def test_destructibility_part_with_damage_pass_on(self) -> None:
+        core = CoreFile.from_bytes(
+            synthetic_entity_core(
+                destructibility_layout=(91, 87),
+                damage_pass_ons=((0, 1.0),),
+            ),
+            source="damage-pass-entities.core",
+        )
+
+        destructibility = CoreDecoder(core).decode(4)
+
+        self.assertIsInstance(destructibility, StateBasedDestructibility)
+        self.assertEqual((3,), tuple(
+            reference.local_index
+            for reference in destructibility.part_states
+        ))
         self.assertTrue(destructibility.part_states_complete)
 
     def test_metadata_catalog_retains_names_for_zero_id_objects(self) -> None:

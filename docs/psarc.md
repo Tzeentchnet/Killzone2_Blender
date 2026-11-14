@@ -2,6 +2,33 @@
 
 [Documentation index](./README.md) | [Known unknowns](./known-unknowns.md)
 
+## Data sources
+
+The add-on accepts either an extracted `data_ps3.psarc` or a decrypted retail
+ISO containing `PS3_GAME/USRDIR/data_ps3.psarc`. ISO sources are read directly:
+the reader resolves the ISO9660 directory tree and streams every PSARC
+multi-extent record as one logical file. It does not mount the image or extract
+a multi-gigabyte temporary archive.
+
+Encrypted ISOs are not supported. An ISO whose embedded archive does not begin
+with `PSAR` produces an explicit error asking for a decrypted image.
+
+## Bundled retail cache
+
+The extension bundles a catalog of the supported retail archive's 7,241
+importable entities and 18 levels, plus a SQLite dependency lookup index. It
+validates both against a SHA-256 fingerprint of the exact PSARC header, TOC
+records, and block-length table. Because the fingerprint covers the logical
+PSARC rather than its outer file path, one cache works with either the matching
+extracted archive or decrypted ISO.
+
+Selecting a matching source activates this cache without scanning thousands of
+CORE entries. The selected source, active catalog, and any index generated for
+another archive are stored in Blender's user configuration directory rather
+than the installed extension directory. A persistent `load_post` handler
+restores them after opening or creating a Blender file, and registration
+restores them after restarting or upgrading the extension.
+
 ## Supported profile
 
 The importer reads the PSARC containing the supported retail

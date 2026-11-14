@@ -325,7 +325,7 @@ def parse_state_based_destructibility(
             part_local_matrices = []
             part_fields = []
             for _ in range(part_count):
-                fields_before = candidate.read(part_prefix_size)
+                fields_start = candidate.position
                 (
                     part_id,
                     enabled,
@@ -333,8 +333,20 @@ def parse_state_based_destructibility(
                     local_matrix,
                 ) = _parse_destructibility_part_fields(
                     decoder,
-                    fields_before,
+                    candidate,
                 )
+                parsed_size = candidate.position - fields_start
+                if parsed_size < part_prefix_size:
+                    padding = candidate.read(
+                        part_prefix_size - parsed_size
+                    )
+                    if any(padding):
+                        raise ValueError(
+                            "nonzero destructibility part padding"
+                        )
+                fields_before = candidate.data[
+                    fields_start : candidate.position
+                ].tobytes()
                 reference = decoder.core.read_reference(candidate)
                 fields_after = candidate.read(
                     DESTRUCTIBILITY_PART_SUFFIX_SIZE
@@ -438,12 +450,8 @@ def _read_matrix4(reader: BinaryReader) -> Matrix4:
 
 def _parse_destructibility_part_fields(
     decoder: CoreDecoder,
-    fields: bytes,
+    reader: BinaryReader,
 ) -> tuple[int, bool, str, Matrix4]:
-    reader = BinaryReader.from_bytes(
-        fields,
-        source=f"{decoder.core.source}: destructibility part",
-    )
     part_id = reader.i32()
     enabled = reader.u8()
     if enabled not in (0, 1):
@@ -461,12 +469,6 @@ def _parse_destructibility_part_fields(
     reader.i32()
     local_matrix = _read_matrix4(reader)
     decoder.core.read_reference(reader)
-    padding = reader.read(reader.remaining)
-    if len(padding) > 1 or any(padding):
-        reader.fail(
-            "unsupported destructibility part fields",
-            observed=padding.hex(),
-        )
     if not all(
         math.isfinite(value)
         for row in local_matrix

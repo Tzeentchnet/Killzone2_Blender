@@ -380,9 +380,10 @@ combinations of shader-object ID, full shader hash, ordered sampler signature,
 variable signature, and technique index.
 
 Profiles marked `proven` in the implementation cover representative M82, Sev,
-hair, Reflection Room, HGH dropship, HGH character, and ISA cruiser variants.
-"Proven" means the sampler role was established for that exact identity, not
-that the entire PS3 deferred shader has an equivalent Blender graph.
+hair, Reflection Room, HGH dropship, HGH character, ISA cruiser, and HGH/ISA
+tank variants. "Proven" means the sampler role was established for that exact
+identity, not that the entire PS3 deferred shader has an equivalent Blender
+graph.
 
 If no exact profile matches, an sRGB `inSampler0` texture is connected as an
 explicit `srgb_heuristic` base color. That fallback is a **guess**, not a
@@ -406,6 +407,25 @@ tangent basis's Y direction, so the preview compensates with encoded
 `G = 1-G`. Disabling **Flip UV V** also disables that compensation. This is a
 coordinate-basis correction rather than a guessed DirectX/OpenGL convention.
 
+The tank programs prove the same tangent-space expansion and source Y sign,
+but use several sampler layouts:
+
+| Family | Base normal | Detail normal |
+|---|---|---|
+| HGH layered body | `inSampler3` | `inSampler4` |
+| HGH tracks | `inSampler4` | None |
+| HGH compact | `inSampler2` | None |
+| ISA layered body | `inSampler2` | `inSampler3` |
+| ISA tracks | `inSampler3` | None |
+| ISA compact | `inSampler2` | None |
+
+The base normals are connected with the same imported-V compensation. The
+layered body programs also prove that the additional sampler is a normal
+detail layer: HGH applies `detail * 0.6 + 0.7`, while ISA scales the detail
+sample by `2` before its profile-specific combination. Blender retains these
+textures as labeled non-color nodes but does not connect them through an
+inexact generic normal blend.
+
 Profiles whose shader-space Y sign remains unknown keep their normal sampler
 as labeled metadata and do not connect it to the surface normal.
 
@@ -421,6 +441,14 @@ following channel operations are proven from their RSX instructions:
 | `3d23b1bce366078a44c0bfe6ac133f61` | `R * 14.7024` | B |
 | `1de0cb0694403a758185efc552229c6d` | `R * 49` | B |
 | `ea746cea3656762cd8b70a78060d9654` | `R * 49` | B |
+| `37118f7b07d5263cfeee4f6d6b6a7ba4`, `90f8c2677ed634533711eb2bfed57af0`, `6cf769273cef73fc83c4b5f780adfebc` | `G * 49` | B |
+| `e03466b9264b1c8a6e663a39cb0f511e` | `R * 49` | B |
+| `b0a8b52eb0560707ecc42dc8c1ec7f88` | `R * 49` | B |
+| `a58e7b007d4d88e2ddfaa61af86a4ab7` | `G * 49` | B |
+| `5c879214cf2789ce4728d5de9d9cbc16` | `R * 49` | B |
+| `c4de041dda84841306f1f2921c995c89`, `7a83011fface8f01eca0b3604fb22f5a`, `710036fa5d9aaddd90279f934e1c7275`, `0a1b584d6a258c6dc25610e3289d5406`, `ef5c0a58695ab51ed3bd2e44d1ea0c91` | `G * 39.1904` | B |
+| `2283f987591d17d65f60db32222736bb` | `R * 39.1904` | B |
+| `d8de6701c66b7caece3b70e3555b198b` | `R * 49` | B |
 
 Blender receives the intensity channel through **Specular IOR Level**. The
 game's Blinn-Phong-style power is approximated as Principled roughness:
@@ -429,9 +457,18 @@ game's Blinn-Phong-style power is approximated as Principled roughness:
 roughness = sqrt(2 / (encoded_power * power_scale + 2))
 ```
 
-`inSampler2` is also proven to be a shared response/IBL lookup for these
-profiles, but that lighting lookup is preserved only as labeled metadata; the
-Principled preview does not attempt to reproduce the deferred IBL pass.
+The relevant HGH dropship, character, and layered tank profiles also identify
+a shared response/IBL lookup (`inSampler2`, or `inSampler3` for HGH tracks).
+That lighting lookup is preserved only as labeled metadata; the Principled
+preview does not attempt to reproduce the deferred IBL pass.
+
+### Tank track color layers
+
+Both tank track programs sample `inSampler0` with `DiffuseUV` and
+`inSampler1` with source `UV0`, then multiply the decoded colors. Their exact
+profiles reproduce that operation with a Blender Multiply node before the
+Principled base-color input. The secondary color sampler is not a damaged
+track state.
 
 ### Packed lightmaps
 
@@ -465,5 +502,6 @@ not a claim of complete equivalence with the original deferred renderer.
   Exact profiles cover only identified shaders; the generic base-color path
   is deliberately labeled as a heuristic.
 - Normal-map signs and packed material channels remain unknown outside the
-  exact profiles above. Ramps, emissive behavior, IBL, secondary detail
-  layers, and blend arithmetic remain profile-specific research topics.
+  exact profiles above. Detail-normal composition, ramps, emissive behavior,
+  IBL, and other secondary blend arithmetic remain profile-specific research
+  topics.
