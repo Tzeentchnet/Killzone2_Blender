@@ -140,6 +140,11 @@ The model reference can resolve locally or through the source PSARC. Repeated
 placements may share Blender mesh datablocks while keeping object-linked
 material overrides.
 
+When level placements are enabled but static meshes are disabled, the
+importer still creates each placement empty with its source metadata, parent,
+and transform. This provides a lightweight scene hierarchy without decoding
+or constructing the referenced mesh payload.
+
 ### `EntityPlaceHolder`
 
 The serializer contains:

@@ -220,6 +220,25 @@ $env:KZ2_PSARC = "E:\path\to\data_ps3.psarc"
 python -m unittest .\tests\test_local_archive.py -v
 ```
 
+Retail Blender end-to-end tests should also use the persistent resource index
+created by **Scan Entities**. The entity tests use it when configured, and the
+level tests require it. Full discovery runs a focused retail tier by default:
+the HGH Dropship, canonical Commando head/helmet attachment, and the complete
+placement hierarchy of one multiplayer map, alongside the fast synthetic
+tests.
+
+```powershell
+$env:KZ2_PSARC = "E:\path\to\data_ps3.psarc"
+$env:KZ2_RESOURCE_INDEX = "E:\path\to\resource-index-v2-....sqlite3"
+python -m unittest discover -s .\tests -v --durations 0
+```
+
+Set `KZ2_EXHAUSTIVE_E2E=1` before the same command to add the ISA Intruder,
+static tank, animated Commando, rifle infantry, full multiplayer geometry,
+campaign-section, and skybox regressions. Retail tests reset Blender data
+between imports so each timing measures one end-to-end asset path rather than
+an increasingly populated scene.
+
 ### Full retail archive audit
 
 Developers can audit every physical `.core` entry without extracting or

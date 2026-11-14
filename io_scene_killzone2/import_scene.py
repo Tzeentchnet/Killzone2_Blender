@@ -139,10 +139,7 @@ class _MeshTemplate:
 
 
 @dataclass(frozen=True, slots=True)
-class _SkinnedMeshTemplate:
-    mesh_data: bpy.types.Mesh
-    render_effect: CoreReference
-    render_effect_decoder: CoreDecoder
+class _SkinnedMeshTemplate(_MeshTemplate):
     skin_vertices: tuple[SkinVertex, ...]
     bone_bindings: BoneBindings | None
     skeleton_decoder: CoreDecoder | None
@@ -282,7 +279,7 @@ def import_core_file(
         len(entity_placeholders),
         len(skeletons),
     )
-    if options.import_static_meshes and level_instances:
+    if level_instances:
         result.meshes += _create_level_static_instances(
             collection,
             decoder,
@@ -306,7 +303,7 @@ def import_core_file(
                     material_builder,
                 )
 
-    if options.import_static_meshes and entity_placeholders:
+    if entity_placeholders:
         result.meshes += _create_level_entity_instances(
             collection,
             decoder,
@@ -487,10 +484,18 @@ def import_psarc_level(
         section_collections[section.key] = child
     shared_collection: bpy.types.Collection | None = None
 
-    external_resolver = PsarcResourceResolver(
-        archive,
-        set(),
-        resource_index_path=options.resource_index_path or None,
+    external_resolver = (
+        PsarcResourceResolver(
+            archive,
+            set(),
+            resource_index_path=options.resource_index_path or None,
+        )
+        if (
+            options.import_static_meshes
+            or options.import_skinned_meshes
+            or options.import_materials
+        )
+        else None
     )
     static_templates: dict[tuple[int, int, int], _MeshTemplate] = {}
     skinned_templates: dict[
@@ -515,11 +520,17 @@ def import_psarc_level(
             source=path,
         )
         decoder = CoreDecoder(core)
-        level_instances = [
-            (record, decoded)
-            for record, decoded in decoder.iter_type("StaticMeshInstance")
-            if isinstance(decoded, StaticMeshInstance)
-        ]
+        level_instances = (
+            [
+                (record, decoded)
+                for record, decoded in decoder.iter_type(
+                    "StaticMeshInstance"
+                )
+                if isinstance(decoded, StaticMeshInstance)
+            ]
+            if options.import_level_objects
+            else []
+        )
         entity_placeholders = (
             [
                 (record, decoded)
@@ -528,30 +539,33 @@ def import_psarc_level(
                 )
                 if isinstance(decoded, EntityPlaceHolder)
             ]
-            if options.import_level_entities
+            if options.import_level_objects and options.import_level_entities
             else []
         )
         if not level_instances and not entity_placeholders:
             _LOG.info("Skipping CORE with no render placements: %s", path)
             continue
 
-        external_resolver.add_requested_ids(_external_resource_ids(decoder))
-        external_resolver.add_requested_names(
-            {
-                (
-                    placeholder.resource_class_name,
-                    placeholder.resource_name,
-                )
-                for _, placeholder in entity_placeholders
-            }
-        )
-        if options.import_materials:
+        if external_resolver is not None:
             external_resolver.add_requested_ids(
-                _external_render_effect_dependency_ids(
-                    decoder,
-                    external_resolver,
-                )
+                _external_resource_ids(decoder)
             )
+            external_resolver.add_requested_names(
+                {
+                    (
+                        placeholder.resource_class_name,
+                        placeholder.resource_name,
+                    )
+                    for _, placeholder in entity_placeholders
+                }
+            )
+            if options.import_materials:
+                external_resolver.add_requested_ids(
+                    _external_render_effect_dependency_ids(
+                        decoder,
+                        external_resolver,
+                    )
+                )
         material_builder = (
             MaterialBuilder(
                 decoder,
@@ -575,7 +589,7 @@ def import_psarc_level(
                 ]
             collection = shared_collection
 
-        if options.import_static_meshes and level_instances:
+        if level_instances:
             result.meshes += _create_level_static_instances(
                 collection,
                 decoder,
@@ -588,7 +602,7 @@ def import_psarc_level(
                 skinned_templates=skinned_templates,
             )
             result.level_instances += len(level_instances)
-        if options.import_static_meshes and entity_placeholders:
+        if entity_placeholders:
             result.meshes += _create_level_entity_instances(
                 collection,
                 decoder,
@@ -608,12 +622,12 @@ def import_psarc_level(
 
     if progress is not None:
         progress(total, total, "")
-    if external_resolver.missing_ids:
+    if external_resolver is not None and external_resolver.missing_ids:
         result.warnings.append(
             f"{len(external_resolver.missing_ids)} external resource IDs "
             "were not found in the configured PSARC"
         )
-    if external_resolver.missing_names:
+    if external_resolver is not None and external_resolver.missing_names:
         result.warnings.append(
             f"{len(external_resolver.missing_names)} entity resource names "
             "were not found in the configured PSARC"
@@ -956,6 +970,9 @@ def _create_level_static_instances(
             options,
         )
 
+    if not options.import_static_meshes:
+        return 0
+
     coordinate_basis = _map_coordinate_basis() if options.convert_map_axes else None
     if static_templates is None:
         static_templates = {}
@@ -977,6 +994,7 @@ def _create_level_static_instances(
             )
             continue
         for leaf in leaves:
+            leaf_templates: Sequence[_MeshTemplate]
             if isinstance(leaf, _SkinnedMeshLeaf):
                 leaf_templates = _skinned_mesh_templates(
                     leaf.decoder,
@@ -1095,6 +1113,9 @@ def _create_level_entity_instances(
         placement["kz2_destructibility_state"] = (
             f"0x{placeholder.destructibility_state:08x}"
         )
+
+        if not options.import_static_meshes:
+            continue
 
         entity = _resolve_named_entity(
             decoder,
@@ -1293,8 +1314,9 @@ def _create_entity_render_objects_impl(
             external_resolver=external_resolver,
         )
         for leaf in leaves:
+            leaf_templates: Sequence[_MeshTemplate]
             if isinstance(leaf, _SkinnedMeshLeaf):
-                templates = _skinned_mesh_templates(
+                leaf_templates = _skinned_mesh_templates(
                     leaf.decoder,
                     leaf.record,
                     leaf.mesh,
@@ -1307,7 +1329,7 @@ def _create_entity_render_objects_impl(
                 )
                 resource_type = "SkinnedMeshResource"
             else:
-                templates = _static_mesh_templates(
+                leaf_templates = _static_mesh_templates(
                     leaf,
                     options,
                     result,
@@ -1317,23 +1339,23 @@ def _create_entity_render_objects_impl(
                     coordinate_basis,
                 )
                 resource_type = "StaticMeshResource"
-            for primitive_index, template in enumerate(templates):
+            for primitive_index, leaf_template in enumerate(leaf_templates):
                 object_name = (
                     leaf.mesh.prefix.name
                     or f"{resource_type}_{leaf.record.index:05d}"
                 )
                 mesh_object = bpy.data.objects.new(
                     f"{object_name}_P{primitive_index:02d}",
-                    template.mesh_data,
+                    leaf_template.mesh_data,
                 )
                 collection.objects.link(mesh_object)
-                if isinstance(template, _SkinnedMeshTemplate):
+                if isinstance(leaf_template, _SkinnedMeshTemplate):
                     _bind_skinned_template(
                         context,
                         collection,
                         placement,
                         mesh_object,
-                        template,
+                        leaf_template,
                         options,
                         result,
                         bound_armatures,

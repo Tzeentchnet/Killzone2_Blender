@@ -20,22 +20,36 @@ except ModuleNotFoundError:
     "requires Blender, KZ2_PSARC, and KZ2_RESOURCE_INDEX",
 )
 class BlenderLevelImportTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        from io_scene_killzone2.kz2_assets.level_catalog import (
+            scan_level_catalog,
+        )
+
+        cls.archive_path = str(Path(os.environ["KZ2_PSARC"]).resolve())
+        cls.levels = {
+            level.key: level
+            for level in scan_level_catalog(cls.archive_path)
+        }
+
+    def setUp(self) -> None:
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+
+    def tearDown(self) -> None:
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+
+    @unittest.skipUnless(
+        os.environ.get("KZ2_EXHAUSTIVE_E2E") == "1",
+        "requires KZ2_EXHAUSTIVE_E2E=1",
+    )
     def test_imports_campaign_section_from_psarc(self) -> None:
         from io_scene_killzone2.import_scene import (
             ImportOptions,
             import_psarc_level,
         )
-        from io_scene_killzone2.kz2_assets.level_catalog import (
-            scan_level_catalog,
-        )
 
-        archive_path = str(Path(os.environ["KZ2_PSARC"]).resolve())
-        levels = scan_level_catalog(archive_path)
-        level = next(
-            value
-            for value in levels
-            if value.key == "campaign:corinth_river"
-        )
+        archive_path = self.archive_path
+        level = self.levels["campaign:corinth_river"]
         section_index = next(
             index
             for index, section in enumerate(level.sections)
@@ -70,6 +84,10 @@ class BlenderLevelImportTests(unittest.TestCase):
         )
         self.assertIn("07 Tunnel", collection.children)
 
+    @unittest.skipUnless(
+        os.environ.get("KZ2_EXHAUSTIVE_E2E") == "1",
+        "requires KZ2_EXHAUSTIVE_E2E=1",
+    )
     def test_imports_dedicated_skybox_geometry(self) -> None:
         from io_scene_killzone2.import_scene import (
             ImportOptions,
@@ -183,21 +201,67 @@ class BlenderLevelImportTests(unittest.TestCase):
                     uv_node.uv_map,
                 )
 
-    def test_imports_multiplayer_map_from_psarc(self) -> None:
+    def test_imports_multiplayer_map_placements_from_psarc(self) -> None:
         from io_scene_killzone2.import_scene import (
             ImportOptions,
             import_psarc_level,
         )
-        from io_scene_killzone2.kz2_assets.level_catalog import (
-            scan_level_catalog,
+
+        archive_path = self.archive_path
+        level = self.levels["multiplayer:mp_level_07"]
+
+        result = import_psarc_level(
+            bpy.context,
+            archive_path,
+            level,
+            0,
+            ImportOptions(
+                source_psarc=archive_path,
+                resource_index_path=os.environ["KZ2_RESOURCE_INDEX"],
+                import_static_meshes=False,
+                import_skinned_meshes=False,
+                import_skeletons=False,
+                import_animations=False,
+                import_materials=False,
+                import_level_entities=False,
+            ),
         )
 
-        archive_path = str(Path(os.environ["KZ2_PSARC"]).resolve())
-        level = next(
-            value
-            for value in scan_level_catalog(archive_path)
-            if value.key == "multiplayer:mp_level_07"
+        placements = [
+            obj
+            for obj in bpy.data.objects
+            if obj.get("kz2_type") == "StaticMeshInstance"
+        ]
+        self.assertEqual(0, result.meshes)
+        self.assertEqual(295, result.level_instances)
+        self.assertEqual(0, result.entity_instances)
+        self.assertEqual(295, len(placements))
+        self.assertTrue(all(obj.type == "EMPTY" for obj in placements))
+        self.assertTrue(
+            any(
+                collection.get("kz2_level_key") == level.key
+                for collection in bpy.data.collections
+            )
         )
+        self.assertFalse(
+            any(
+                "no supported render placements" in warning
+                for warning in result.warnings
+            )
+        )
+
+    @unittest.skipUnless(
+        os.environ.get("KZ2_EXHAUSTIVE_E2E") == "1",
+        "requires KZ2_EXHAUSTIVE_E2E=1",
+    )
+    def test_imports_multiplayer_map_geometry_from_psarc(self) -> None:
+        from io_scene_killzone2.import_scene import (
+            ImportOptions,
+            import_psarc_level,
+        )
+
+        archive_path = self.archive_path
+        level = self.levels["multiplayer:mp_level_07"]
 
         result = import_psarc_level(
             bpy.context,

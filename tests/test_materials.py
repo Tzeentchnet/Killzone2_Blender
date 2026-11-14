@@ -178,6 +178,99 @@ class MaterialTests(unittest.TestCase):
         )
         self.assertTrue(all(profile.profile_id is None for profile in unmatched))
 
+    def test_isa_intruder_profiles_flip_source_diffuse_v(self) -> None:
+        detail_samplers = (
+            "inSampler3",
+            "inSampler4",
+            "inSampler0",
+            "inSampler1",
+            "inSampler2",
+        )
+        variants = (
+            (
+                "isa_intruder_detail_deferred",
+                (
+                    "ada42a8d61bb7f771c2cf907d04464ca"
+                    "b2ae95f2298c87181b9446fd70be8f02"
+                ),
+                "631dc38edec0712bbb2713bb8a048023",
+                detail_samplers,
+            ),
+            (
+                "isa_intruder_detail_deferred",
+                (
+                    "63dddec576e98fd952ab7800bfeda3724"
+                    "d805aed72d4887feb2267ba8ceda1a5"
+                ),
+                "c69e155a3ee8bf78fb69eb313bd02765",
+                detail_samplers,
+            ),
+            (
+                "isa_intruder_deferred",
+                (
+                    "efdfa954d7e86a54650086a4d288eecf"
+                    "e1dde75ac1d7f187dd483b2b19e075d7"
+                ),
+                "454c34802c8ecfd0f88b37607d5b615b",
+                (
+                    "inSampler3",
+                    "inSampler0",
+                    "inSampler1",
+                    "inSampler2",
+                ),
+            ),
+        )
+        for profile_id, shader_hash, shader_object_id, samplers in variants:
+            with self.subTest(shader_object_id=shader_object_id):
+                profile = shader_preview_profile(
+                    shader_hash,
+                    samplers,
+                    shader_object_id=shader_object_id,
+                    variable_signature=(),
+                )
+                self.assertEqual(profile_id, profile.profile_id)
+                self.assertEqual("proven", profile.confidence)
+                self.assertEqual("inSampler0", profile.base_color_sampler)
+                self.assertEqual("DiffuseUV", profile.base_color_uv_map)
+                self.assertTrue(profile.flip_diffuse_v)
+
+                unmatched = (
+                    shader_preview_profile(
+                        "0" * 64,
+                        samplers,
+                        shader_object_id=shader_object_id,
+                        variable_signature=(),
+                    ),
+                    shader_preview_profile(
+                        shader_hash,
+                        samplers,
+                        shader_object_id="0" * 32,
+                        variable_signature=(),
+                    ),
+                    shader_preview_profile(
+                        shader_hash,
+                        samplers[:-2] + (samplers[-1], samplers[-2]),
+                        shader_object_id=shader_object_id,
+                        variable_signature=(),
+                    ),
+                    shader_preview_profile(
+                        shader_hash,
+                        samplers,
+                        shader_object_id=shader_object_id,
+                        variable_signature=("inVariable0",),
+                    ),
+                    shader_preview_profile(
+                        shader_hash,
+                        samplers,
+                        shader_object_id=shader_object_id,
+                        variable_signature=(),
+                        technique_index=1,
+                    ),
+                )
+                self.assertTrue(
+                    all(value.profile_id is None for value in unmatched)
+                )
+
     def test_dropship_profile_decodes_specular_channels(self) -> None:
         profile = shader_preview_profile(
             "44cef75c8dee1cdaa570b698db010cc222f46afcd76707fdb22b188d38a0bf60",

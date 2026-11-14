@@ -18,6 +18,12 @@ except ModuleNotFoundError:
     "requires Blender and KZ2_PSARC",
 )
 class BlenderEntityImportTests(unittest.TestCase):
+    def setUp(self) -> None:
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+
+    def tearDown(self) -> None:
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+
     def test_dropship_imports_attached_turrets_and_profiled_material(
         self,
     ) -> None:
@@ -39,6 +45,10 @@ class BlenderEntityImportTests(unittest.TestCase):
             45,
             ImportOptions(
                 source_psarc=archive_path,
+                resource_index_path=os.environ.get(
+                    "KZ2_RESOURCE_INDEX",
+                    "",
+                ),
                 import_materials=True,
                 flip_uv_v=True,
             ),
@@ -272,6 +282,111 @@ class BlenderEntityImportTests(unittest.TestCase):
             normal_texture.image.colorspace_settings.name,
         )
 
+    @unittest.skipUnless(
+        os.environ.get("KZ2_EXHAUSTIVE_E2E") == "1",
+        "requires KZ2_EXHAUSTIVE_E2E=1",
+    )
+    def test_isa_intruder_uses_profiled_diffuse_uv_transform(self) -> None:
+        from io_scene_killzone2.import_scene import (
+            ImportOptions,
+            import_psarc_entity,
+        )
+
+        archive_path = str(Path(os.environ["KZ2_PSARC"]).resolve())
+        core_path = (
+            "LocalCachePS3/lumps/"
+            "assets_description.vehicles.isa_intruder_isa_intruder.core"
+        )
+        result = import_psarc_entity(
+            bpy.context,
+            archive_path,
+            core_path,
+            22,
+            ImportOptions(
+                source_psarc=archive_path,
+                resource_index_path=os.environ.get(
+                    "KZ2_RESOURCE_INDEX",
+                    "",
+                ),
+                import_materials=True,
+                flip_uv_v=True,
+            ),
+        )
+
+        self.assertEqual(17, result.meshes)
+        self.assertEqual(1, result.armatures)
+        self.assertEqual(1, result.actions)
+        self.assertEqual(3, result.materials)
+        expected_profiles = {
+            "631dc38edec0712bbb2713bb8a048023": (
+                "isa_intruder_detail_deferred"
+            ),
+            "c69e155a3ee8bf78fb69eb313bd02765": (
+                "isa_intruder_detail_deferred"
+            ),
+            "454c34802c8ecfd0f88b37607d5b615b": "isa_intruder_deferred",
+        }
+        materials = {
+            material["kz2_shader_object_id"]: material
+            for material in bpy.data.materials
+            if material.get("kz2_shader_object_id") in expected_profiles
+        }
+        self.assertEqual(expected_profiles.keys(), materials.keys())
+        for shader_object_id, profile_id in expected_profiles.items():
+            with self.subTest(shader_object_id=shader_object_id):
+                material = materials[shader_object_id]
+                self.assertEqual(profile_id, material["kz2_profile_id"])
+                self.assertEqual("proven", material["kz2_profile_status"])
+                self.assertEqual(
+                    "inSampler0",
+                    material["kz2_preview_base_color"],
+                )
+                self.assertEqual(
+                    "shader_profile",
+                    material["kz2_preview_base_color_source"],
+                )
+                self.assertEqual(
+                    "DiffuseUV",
+                    material["kz2_preview_uv_map"],
+                )
+                self.assertTrue(material["kz2_preview_diffuse_v_flip"])
+                principled = next(
+                    node
+                    for node in material.node_tree.nodes
+                    if node.bl_idname == "ShaderNodeBsdfPrincipled"
+                )
+                texture = (
+                    principled.inputs["Base Color"].links[0].from_node
+                )
+                self.assertEqual("inSampler0", texture["kz2_sampler"])
+                mapping = texture.inputs["Vector"].links[0].from_node
+                self.assertEqual("KZ2_DiffuseUVTransform", mapping.name)
+                uv = mapping.inputs["Vector"].links[0].from_node
+                self.assertEqual("DiffuseUV", uv.uv_map)
+
+        profiled_meshes = [
+            obj
+            for obj in bpy.data.objects
+            if obj.type == "MESH"
+            and any(
+                material is not None
+                and material.get("kz2_shader_object_id")
+                in expected_profiles
+                for material in obj.data.materials
+            )
+        ]
+        self.assertTrue(profiled_meshes)
+        self.assertTrue(
+            all(
+                {"UV0", "DiffuseUV"}.issubset(obj.data.uv_layers.keys())
+                for obj in profiled_meshes
+            )
+        )
+
+    @unittest.skipUnless(
+        os.environ.get("KZ2_EXHAUSTIVE_E2E") == "1",
+        "requires KZ2_EXHAUSTIVE_E2E=1",
+    )
     def test_static_tank_skips_unrelated_invalid_animation(self) -> None:
         from io_scene_killzone2.import_scene import (
             ImportOptions,
@@ -293,6 +408,10 @@ class BlenderEntityImportTests(unittest.TestCase):
             713,
             ImportOptions(
                 source_psarc=archive_path,
+                resource_index_path=os.environ.get(
+                    "KZ2_RESOURCE_INDEX",
+                    "",
+                ),
                 import_materials=False,
             ),
         )
@@ -339,6 +458,10 @@ class BlenderEntityImportTests(unittest.TestCase):
             16,
             ImportOptions(
                 source_psarc=archive_path,
+                resource_index_path=os.environ.get(
+                    "KZ2_RESOURCE_INDEX",
+                    "",
+                ),
                 import_materials=True,
                 import_animations=True,
             ),
@@ -483,6 +606,10 @@ class BlenderEntityImportTests(unittest.TestCase):
             result.warnings[0],
         )
 
+    @unittest.skipUnless(
+        os.environ.get("KZ2_EXHAUSTIVE_E2E") == "1",
+        "requires KZ2_EXHAUSTIVE_E2E=1",
+    )
     def test_y_animated_commando_helmet_follows_neck(self) -> None:
         from io_scene_killzone2.import_scene import (
             ImportOptions,
@@ -505,6 +632,10 @@ class BlenderEntityImportTests(unittest.TestCase):
             132,
             ImportOptions(
                 source_psarc=archive_path,
+                resource_index_path=os.environ.get(
+                    "KZ2_RESOURCE_INDEX",
+                    "",
+                ),
                 import_materials=False,
                 import_animations=True,
             ),
@@ -563,6 +694,10 @@ class BlenderEntityImportTests(unittest.TestCase):
                 ):
                     self.assertAlmostEqual(expected, value, places=5)
 
+    @unittest.skipUnless(
+        os.environ.get("KZ2_EXHAUSTIVE_E2E") == "1",
+        "requires KZ2_EXHAUSTIVE_E2E=1",
+    )
     def test_x_rifle_infantry_helmet_uses_declared_bone(self) -> None:
         from io_scene_killzone2.import_scene import (
             ImportOptions,
@@ -584,6 +719,10 @@ class BlenderEntityImportTests(unittest.TestCase):
             15,
             ImportOptions(
                 source_psarc=archive_path,
+                resource_index_path=os.environ.get(
+                    "KZ2_RESOURCE_INDEX",
+                    "",
+                ),
                 import_materials=False,
                 import_animations=False,
             ),

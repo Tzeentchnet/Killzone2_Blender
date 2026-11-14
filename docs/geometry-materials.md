@@ -165,6 +165,16 @@ diagnostic V flip instead converts it to `1-w`. This asymmetric behavior is
 **retail-validated** against traced level shader variants, but it should not
 be generalized to every engine or shader revision without evidence.
 
+The ISA Intruder is an exact counterexample to treating stored `.zw` as
+universally pre-flipped. Its three retail vertex programs transform the
+source pair to `(z, 1-w)`. Their paired fragment programs sample that result
+for `inSampler0`: two variants use texture unit 2 with `tc8.xy`, while the
+third uses texture unit 1 with `tc2.zw`. Exact shader profiles therefore keep
+the `DiffuseUV` source layer but add a `(u, 1-v)` mapping node. This selection
+is keyed by the compiled shader hash, object ID, sampler signature, empty
+variable signature, and technique index; it is not keyed by vehicle or asset
+name.
+
 ## Skinned geometry
 
 `RegularSkinnedMeshResource` stores:

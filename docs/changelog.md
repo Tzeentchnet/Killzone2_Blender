@@ -45,6 +45,10 @@ results.
 - Blender mesh construction now validates source topology before assigning
   normals and UVs. Invalid or duplicate triangles are repaired with a logged
   warning instead of being silently changed later by an interchange exporter.
+- ISA Intruder base-color previews now use exact shader profiles that apply
+  the vertex programs' `(z, 1-w)` coordinate transform. This replaces the
+  unflipped heuristic that visibly mapped unrelated atlas regions onto the
+  vehicle.
 
 ### Changed
 
@@ -53,13 +57,29 @@ results.
 - `EntityPlaceHolder.LinkedObjects` remains distinct from child entity
   resources; direct linked lights are not incorrectly treated as animated
   children.
+- Retail Blender test discovery now runs representative Dropship, character,
+  and multiplayer-map end-to-end scenarios by default. Set
+  `KZ2_EXHAUSTIVE_E2E=1` to add every retail entity and full-geometry level
+  regression.
+- Level placements can now be imported as transform and metadata empties when
+  static mesh geometry is disabled, keeping placement-only validation
+  end-to-end without constructing a complete map's mesh payload.
 
 ### Validation
 
 - The complete Python 3.12 suite passed against the supported retail archive:
-  **93 tests, zero failures, 15 Blender-only skips**.
-- The complete Python 3.13 and `bpy` 5.2.2 suite passed with a freshly built
-  retail resource index: **93 tests, zero failures, zero skips**.
+  **96 tests in 2.235 seconds, zero failures, 17 Blender-only skips**.
+- The default Python 3.13 and `bpy` 5.2.2 suite passed against the supported
+  retail archive and persistent resource index: **96 tests in 7.710 seconds,
+  zero failures, seven intentional exhaustive-tier skips**. The selected
+  retail scenarios were the HGH Dropship, canonical Commando attachment, and
+  all 295 placements from Visari Hammer. This is roughly 36 times faster than
+  the prior 278.669-second focused run that materialized the complete
+  multiplayer mesh payload.
+- The opt-in exhaustive retail files also passed: **six entity scenarios in
+  13.849 seconds** and **four level scenarios in 331.190 seconds**. The level
+  total includes the intentionally expensive 280.906-second full multiplayer
+  geometry regression.
 - Retail dropship validation imports 19 meshes, three armatures, ten Actions,
   and two helper-attached turret placements that move with the body rig.
 - Packaged-extension operator tests import and save both canonical Dropships,
@@ -76,6 +96,10 @@ results.
   Commando shaders expand `inSampler3` as `RGB * 2 - 1` without a shader-side
   Y inversion. It also proves per-shader `inSampler1` specular-power scales of
   98, 24.5, 14.7024, and 49, with B as specular intensity.
+- Compiled ISA Intruder vertex and fragment programs prove that all three
+  `inSampler0` variants use the source `.zw` UV pair with an explicit
+  `1-w` transform. A rendered A/B check confirms the profiled transform
+  restores coherent panel, grille, marking, and wheel texture placement.
 - An embedded retail HGH Commando imports nine compatible Actions. Applying
   one to the canonical commando confirms that
   `StaticMeshResource_00018_P00` moves with the `neck` bone across frames 1,

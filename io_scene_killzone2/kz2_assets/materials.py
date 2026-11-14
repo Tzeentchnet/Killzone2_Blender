@@ -157,6 +157,68 @@ _SHADER_PREVIEW_PROFILES = (
         ),
     ),
     _ShaderPreviewProfileEntry(
+        shader_body_sha256=(
+            "ada42a8d61bb7f771c2cf907d04464cab2ae95f2298c87181b9446fd70be8f02"
+        ),
+        shader_object_id="631dc38edec0712bbb2713bb8a048023",
+        sampler_signature=(
+            "inSampler3",
+            "inSampler4",
+            "inSampler0",
+            "inSampler1",
+            "inSampler2",
+        ),
+        variable_signature=(),
+        profile=ShaderPreviewProfile(
+            profile_id="isa_intruder_detail_deferred",
+            confidence="proven",
+            base_color_sampler="inSampler0",
+            base_color_uv_map="DiffuseUV",
+            flip_diffuse_v=True,
+        ),
+    ),
+    _ShaderPreviewProfileEntry(
+        shader_body_sha256=(
+            "63dddec576e98fd952ab7800bfeda3724d805aed72d4887feb2267ba8ceda1a5"
+        ),
+        shader_object_id="c69e155a3ee8bf78fb69eb313bd02765",
+        sampler_signature=(
+            "inSampler3",
+            "inSampler4",
+            "inSampler0",
+            "inSampler1",
+            "inSampler2",
+        ),
+        variable_signature=(),
+        profile=ShaderPreviewProfile(
+            profile_id="isa_intruder_detail_deferred",
+            confidence="proven",
+            base_color_sampler="inSampler0",
+            base_color_uv_map="DiffuseUV",
+            flip_diffuse_v=True,
+        ),
+    ),
+    _ShaderPreviewProfileEntry(
+        shader_body_sha256=(
+            "efdfa954d7e86a54650086a4d288eecfe1dde75ac1d7f187dd483b2b19e075d7"
+        ),
+        shader_object_id="454c34802c8ecfd0f88b37607d5b615b",
+        sampler_signature=(
+            "inSampler3",
+            "inSampler0",
+            "inSampler1",
+            "inSampler2",
+        ),
+        variable_signature=(),
+        profile=ShaderPreviewProfile(
+            profile_id="isa_intruder_deferred",
+            confidence="proven",
+            base_color_sampler="inSampler0",
+            base_color_uv_map="DiffuseUV",
+            flip_diffuse_v=True,
+        ),
+    ),
+    _ShaderPreviewProfileEntry(
         shader_object_id="c54604143359f6cb1e7766c8fa2a3b38",
         sampler_signature=(
             "inSampler3",
