@@ -3,9 +3,15 @@ from __future__ import annotations
 import struct
 import unittest
 
+try:
+    import bpy
+except ModuleNotFoundError:
+    bpy = None
+
 from io_scene_killzone2.kz2_assets.core import CORE_SIGNATURE, CoreFile
 from io_scene_killzone2.kz2_assets.decoder import CoreDecoder
 from io_scene_killzone2.kz2_assets.materials import (
+    ShaderPreviewProfile,
     blender_lightmap_uv_mapping,
     blender_roughness_from_specular_power,
     decode_packed_lightmap_sample,
@@ -188,6 +194,7 @@ class MaterialTests(unittest.TestCase):
         self.assertEqual("hgh_dropship_deferred", profile.profile_id)
         self.assertEqual("inSampler0", profile.base_color_sampler)
         self.assertEqual("inSampler3", profile.normal_sampler)
+        self.assertFalse(profile.normal_y_flip)
         self.assertEqual("inSampler1", profile.material_sampler)
         self.assertEqual("inSampler2", profile.reflection_sampler)
         self.assertEqual("G", profile.specular_power_channel)
@@ -201,6 +208,100 @@ class MaterialTests(unittest.TestCase):
             "IBL lookup",
             profile.role_for_sampler("inSampler2"),
         )
+
+    def test_hgh_character_profiles_decode_normal_and_specular_channels(
+        self,
+    ) -> None:
+        samplers = (
+            "inSampler3",
+            "inSampler0",
+            "inSampler1",
+            "inSampler2",
+        )
+        variants = (
+            (
+                (
+                    "b26212b2b1a9d326fff9ab939f5f2b52"
+                    "aa1a755de9a4dacb393aa064bc5790ab"
+                ),
+                "2ee5e3ff3a42dd5cd1f33374891901f0",
+                "hgh_character_deferred_g24_5",
+                "G",
+                24.5,
+            ),
+            (
+                (
+                    "9c95d347249ae1ecb6bda6bbff7d0f3"
+                    "f159d5b59c342e42296e700027045ed5a"
+                ),
+                "3d23b1bce366078a44c0bfe6ac133f61",
+                "hgh_character_deferred_r14_7024",
+                "R",
+                14.7024,
+            ),
+            (
+                (
+                    "5201239dbeafa941605bde1b0eb3f0e2"
+                    "f8b49342334400592395b96519e6b36c"
+                ),
+                "1de0cb0694403a758185efc552229c6d",
+                "hgh_character_deferred_r49",
+                "R",
+                49.0,
+            ),
+            (
+                (
+                    "b6079e1145b9b727936891c66c57a247"
+                    "ed0868fdc33b05c45b0e2030a696a7fb"
+                ),
+                "ea746cea3656762cd8b70a78060d9654",
+                "hgh_character_deferred_r49",
+                "R",
+                49.0,
+            ),
+        )
+        for (
+            shader_hash,
+            shader_object_id,
+            profile_id,
+            power_channel,
+            power_scale,
+        ) in variants:
+            with self.subTest(shader_object_id=shader_object_id):
+                profile = shader_preview_profile(
+                    shader_hash,
+                    samplers,
+                    shader_object_id=shader_object_id,
+                    variable_signature=(),
+                )
+                self.assertEqual(profile_id, profile.profile_id)
+                self.assertEqual("proven", profile.confidence)
+                self.assertEqual("inSampler0", profile.base_color_sampler)
+                self.assertEqual("inSampler3", profile.normal_sampler)
+                self.assertEqual("tangent", profile.normal_space)
+                self.assertFalse(profile.normal_y_flip)
+                self.assertEqual("inSampler1", profile.material_sampler)
+                self.assertEqual("inSampler2", profile.reflection_sampler)
+                self.assertEqual(
+                    power_channel,
+                    profile.specular_power_channel,
+                )
+                self.assertEqual(
+                    power_scale,
+                    profile.specular_power_scale,
+                )
+                self.assertEqual(
+                    "B",
+                    profile.specular_intensity_channel,
+                )
+
+                unmatched = shader_preview_profile(
+                    "0" * 64,
+                    samplers,
+                    shader_object_id=shader_object_id,
+                    variable_signature=(),
+                )
+                self.assertIsNone(unmatched.profile_id)
 
     def test_specular_power_to_blender_roughness(self) -> None:
         self.assertEqual(
@@ -402,6 +503,108 @@ class MaterialTests(unittest.TestCase):
         self.assertEqual((0.5, 0.25, 0.125, 0.75), variable.value)
         self.assertTrue(variable.animator.is_null)
         self.assertEqual("inVariable0", variable.shader_input)
+
+
+@unittest.skipUnless(bpy is not None, "requires Blender")
+class MaterialNodeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.material = bpy.data.materials.new("KZ2_NormalNodeTest")
+        self.nodes = self.material.node_tree.nodes
+        self.nodes.clear()
+        self.principled = self.nodes.new("ShaderNodeBsdfPrincipled")
+        self.texture = self.nodes.new("ShaderNodeTexImage")
+        self.texture["kz2_sampler"] = "normal"
+        self.image = bpy.data.images.new("KZ2_NormalNodeImage", 1, 1)
+        self.image.colorspace_settings.name = "Non-Color"
+        self.texture.image = self.image
+
+    def tearDown(self) -> None:
+        bpy.data.materials.remove(self.material)
+        bpy.data.images.remove(self.image)
+
+    def test_tangent_normal_compensates_for_imported_v_flip(self) -> None:
+        from io_scene_killzone2.import_materials import MaterialBuilder
+
+        warnings: list[str] = []
+        builder = MaterialBuilder(
+            decoder=None,
+            warnings=warnings,
+            flip_uv_v=True,
+        )
+        profile = ShaderPreviewProfile(
+            profile_id="normal-test",
+            confidence="proven",
+            normal_sampler="normal",
+            normal_space="tangent",
+            normal_y_flip=False,
+        )
+
+        builder._connect_profile_normal(
+            self.nodes,
+            self.material.node_tree,
+            self.principled,
+            profile,
+            {"normal": self.texture},
+            self.material,
+        )
+
+        self.assertEqual([], warnings)
+        normal_map = self.nodes["KZ2_NormalMap"]
+        self.assertEqual("TANGENT", normal_map.space)
+        self.assertEqual("DiffuseUV", normal_map.uv_map)
+        self.assertTrue(self.principled.inputs["Normal"].is_linked)
+        self.assertEqual(
+            normal_map.name,
+            self.principled.inputs["Normal"].links[0].from_node.name,
+        )
+        self.assertEqual(
+            "KZ2_NormalColor",
+            normal_map.inputs["Color"].links[0].from_node.name,
+        )
+        invert = self.nodes["KZ2_NormalYInvert"]
+        self.assertEqual("SUBTRACT", invert.operation)
+        self.assertEqual(1.0, invert.inputs[0].default_value)
+        self.assertEqual(
+            "KZ2_NormalChannels",
+            invert.inputs[1].links[0].from_node.name,
+        )
+        self.assertTrue(self.material["kz2_preview_normal_y_flip"])
+
+    def test_object_normal_keeps_proven_source_y_sign(self) -> None:
+        from io_scene_killzone2.import_materials import MaterialBuilder
+
+        warnings: list[str] = []
+        builder = MaterialBuilder(
+            decoder=None,
+            warnings=warnings,
+            flip_uv_v=True,
+        )
+        profile = ShaderPreviewProfile(
+            profile_id="normal-test",
+            confidence="proven",
+            normal_sampler="normal",
+            normal_space="object",
+            normal_y_flip=False,
+        )
+
+        builder._connect_profile_normal(
+            self.nodes,
+            self.material.node_tree,
+            self.principled,
+            profile,
+            {"normal": self.texture},
+            self.material,
+        )
+
+        self.assertEqual([], warnings)
+        normal_map = self.nodes["KZ2_NormalMap"]
+        self.assertEqual("OBJECT", normal_map.space)
+        self.assertEqual(
+            self.texture.name,
+            normal_map.inputs["Color"].links[0].from_node.name,
+        )
+        self.assertIsNone(self.nodes.get("KZ2_NormalYInvert"))
+        self.assertFalse(self.material["kz2_preview_normal_y_flip"])
 
 
 if __name__ == "__main__":

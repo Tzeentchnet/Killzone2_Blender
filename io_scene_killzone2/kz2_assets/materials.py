@@ -28,6 +28,7 @@ class ShaderPreviewProfile:
     opacity_sampler: str | None = None
     normal_sampler: str | None = None
     normal_space: str | None = None
+    # Shader-space inversion before compensating for the imported UV-V basis.
     normal_y_flip: bool | None = None
     material_sampler: str | None = None
     reflection_sampler: str | None = None
@@ -170,10 +171,115 @@ _SHADER_PREVIEW_PROFILES = (
             base_color_sampler="inSampler0",
             normal_sampler="inSampler3",
             normal_space="tangent",
+            normal_y_flip=False,
             material_sampler="inSampler1",
             reflection_sampler="inSampler2",
             specular_power_channel="G",
             specular_power_scale=98.0,
+            specular_intensity_channel="B",
+        ),
+    ),
+    _ShaderPreviewProfileEntry(
+        shader_body_sha256=(
+            "b26212b2b1a9d326fff9ab939f5f2b52aa1a755de9a4dacb393aa064bc5790ab"
+        ),
+        shader_object_id="2ee5e3ff3a42dd5cd1f33374891901f0",
+        sampler_signature=(
+            "inSampler3",
+            "inSampler0",
+            "inSampler1",
+            "inSampler2",
+        ),
+        variable_signature=(),
+        profile=ShaderPreviewProfile(
+            profile_id="hgh_character_deferred_g24_5",
+            confidence="proven",
+            base_color_sampler="inSampler0",
+            normal_sampler="inSampler3",
+            normal_space="tangent",
+            normal_y_flip=False,
+            material_sampler="inSampler1",
+            reflection_sampler="inSampler2",
+            specular_power_channel="G",
+            specular_power_scale=24.5,
+            specular_intensity_channel="B",
+        ),
+    ),
+    _ShaderPreviewProfileEntry(
+        shader_body_sha256=(
+            "9c95d347249ae1ecb6bda6bbff7d0f3f159d5b59c342e42296e700027045ed5a"
+        ),
+        shader_object_id="3d23b1bce366078a44c0bfe6ac133f61",
+        sampler_signature=(
+            "inSampler3",
+            "inSampler0",
+            "inSampler1",
+            "inSampler2",
+        ),
+        variable_signature=(),
+        profile=ShaderPreviewProfile(
+            profile_id="hgh_character_deferred_r14_7024",
+            confidence="proven",
+            base_color_sampler="inSampler0",
+            normal_sampler="inSampler3",
+            normal_space="tangent",
+            normal_y_flip=False,
+            material_sampler="inSampler1",
+            reflection_sampler="inSampler2",
+            specular_power_channel="R",
+            specular_power_scale=14.7024,
+            specular_intensity_channel="B",
+        ),
+    ),
+    _ShaderPreviewProfileEntry(
+        shader_body_sha256=(
+            "5201239dbeafa941605bde1b0eb3f0e2f8b49342334400592395b96519e6b36c"
+        ),
+        shader_object_id="1de0cb0694403a758185efc552229c6d",
+        sampler_signature=(
+            "inSampler3",
+            "inSampler0",
+            "inSampler1",
+            "inSampler2",
+        ),
+        variable_signature=(),
+        profile=ShaderPreviewProfile(
+            profile_id="hgh_character_deferred_r49",
+            confidence="proven",
+            base_color_sampler="inSampler0",
+            normal_sampler="inSampler3",
+            normal_space="tangent",
+            normal_y_flip=False,
+            material_sampler="inSampler1",
+            reflection_sampler="inSampler2",
+            specular_power_channel="R",
+            specular_power_scale=49.0,
+            specular_intensity_channel="B",
+        ),
+    ),
+    _ShaderPreviewProfileEntry(
+        shader_body_sha256=(
+            "b6079e1145b9b727936891c66c57a247ed0868fdc33b05c45b0e2030a696a7fb"
+        ),
+        shader_object_id="ea746cea3656762cd8b70a78060d9654",
+        sampler_signature=(
+            "inSampler3",
+            "inSampler0",
+            "inSampler1",
+            "inSampler2",
+        ),
+        variable_signature=(),
+        profile=ShaderPreviewProfile(
+            profile_id="hgh_character_deferred_r49",
+            confidence="proven",
+            base_color_sampler="inSampler0",
+            normal_sampler="inSampler3",
+            normal_space="tangent",
+            normal_y_flip=False,
+            material_sampler="inSampler1",
+            reflection_sampler="inSampler2",
+            specular_power_channel="R",
+            specular_power_scale=49.0,
             specular_intensity_channel="B",
         ),
     ),

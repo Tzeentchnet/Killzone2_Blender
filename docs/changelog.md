@@ -16,6 +16,12 @@ results.
   `TurretResource`.
 - RTTI-profiled humanoid body-variant references for `HumanoidResource` and
   `SoldierResource`.
+- Exact HGH dropship and character normal-map previews. Proven tangent-space
+  maps now feed Blender's Normal Map node, including green-channel
+  compensation for the default imported UV-V flip.
+- Four exact HGH character packed-material profiles. Their shader-specific
+  specular-power channels and scales now drive Principled roughness, while
+  packed B drives Specular IOR Level.
 
 ### Fixed
 
@@ -48,16 +54,19 @@ results.
 ### Validation
 
 - The complete Python 3.12 suite passed against the supported retail archive:
-  **89 tests, zero failures, 12 Blender-only skips**.
-- The complete Python 3.13 and `bpy` 5.2.2 suite passed:
-  **89 tests, zero failures, three resource-index-dependent level skips**.
-  Those three campaign, skybox, and multiplayer level imports then passed
-  separately with a freshly built retail resource index.
+  **92 tests, zero failures, 14 Blender-only skips**.
+- The complete Python 3.13 and `bpy` 5.2.2 suite passed with a freshly built
+  retail resource index: **92 tests, zero failures, zero skips**.
 - Retail dropship validation imports 19 meshes, three armatures, ten Actions,
   and two helper-attached turret placements that move with the body rig.
 - Retail commando validation imports the intact body, head, and helmet on one
   shared 91-bone armature in rest pose, excludes five disabled damage
-  fragments, and imports no unrelated Actions.
+  fragments, imports no unrelated Actions, and verifies all four exact
+  material profiles, normal graphs, and packed roughness graphs.
+- Compiled retail RSX shader inspection proves that the HGH dropship and four
+  Commando shaders expand `inSampler3` as `RGB * 2 - 1` without a shader-side
+  Y inversion. It also proves per-shader `inSampler1` specular-power scales of
+  98, 24.5, 14.7024, and 49, with B as specular intensity.
 - An embedded retail HGH Commando imports nine compatible Actions. Applying
   one to the canonical commando confirms that
   `StaticMeshResource_00018_P00` moves with the `neck` bone across frames 1,

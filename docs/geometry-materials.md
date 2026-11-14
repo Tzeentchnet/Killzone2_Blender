@@ -364,14 +364,58 @@ combinations of shader-object ID, full shader hash, ordered sampler signature,
 variable signature, and technique index.
 
 Profiles marked `proven` in the implementation cover representative M82, Sev,
-hair, Reflection Room, HGH dropship, and ISA cruiser variants. "Proven" means
-the sampler role was established for that exact identity, not that the entire
-PS3 deferred shader has an equivalent Blender graph.
+hair, Reflection Room, HGH dropship, HGH character, and ISA cruiser variants.
+"Proven" means the sampler role was established for that exact identity, not
+that the entire PS3 deferred shader has an equivalent Blender graph.
 
 If no exact profile matches, an sRGB `inSampler0` texture is connected as an
 explicit `srgb_heuristic` base color. That fallback is a **guess**, not a
 format rule. Other numbered samplers remain available as named nodes rather
 than being assigned speculative roles.
+
+### Tangent-space normal preview
+
+The compiled fragment programs for the exact HGH dropship and four HGH
+character profiles establish this path:
+
+1. `inSampler3` is bound to texture unit zero.
+2. The texture instruction expands every RGB component with
+   `normal = encoded * 2 - 1`.
+3. R weights the vertex tangent, G weights the vertex binormal, and B weights
+   the vertex normal. The shader does not negate G.
+
+Those profiles therefore connect `inSampler3` through a Blender Normal Map
+node. The default mesh import changes `(u, v)` to `(u, 1-v)`, reversing the
+tangent basis's Y direction, so the preview compensates with encoded
+`G = 1-G`. Disabling **Flip UV V** also disables that compensation. This is a
+coordinate-basis correction rather than a guessed DirectX/OpenGL convention.
+
+Profiles whose shader-space Y sign remains unknown keep their normal sampler
+as labeled metadata and do not connect it to the surface normal.
+
+### Packed material preview
+
+The same exact fragment programs bind `inSampler1` to texture unit two. The
+following channel operations are proven from their RSX instructions:
+
+| Shader object ID | Specular power | Specular intensity |
+|---|---|---|
+| `c54604143359f6cb1e7766c8fa2a3b38` | `G * 98` | B |
+| `2ee5e3ff3a42dd5cd1f33374891901f0` | `G * 24.5` | B |
+| `3d23b1bce366078a44c0bfe6ac133f61` | `R * 14.7024` | B |
+| `1de0cb0694403a758185efc552229c6d` | `R * 49` | B |
+| `ea746cea3656762cd8b70a78060d9654` | `R * 49` | B |
+
+Blender receives the intensity channel through **Specular IOR Level**. The
+game's Blinn-Phong-style power is approximated as Principled roughness:
+
+```text
+roughness = sqrt(2 / (encoded_power * power_scale + 2))
+```
+
+`inSampler2` is also proven to be a shared response/IBL lookup for these
+profiles, but that lighting lookup is preserved only as labeled metadata; the
+Principled preview does not attempt to reproduce the deferred IBL pass.
 
 ### Packed lightmaps
 
@@ -404,6 +448,6 @@ not a claim of complete equivalence with the original deferred renderer.
 - Compiled `SHO` programs are not generally decompiled into Blender graphs.
   Exact profiles cover only identified shaders; the generic base-color path
   is deliberately labeled as a heuristic.
-- Normal-map signs, packed material channels, ramps, emissive behavior, IBL,
-  secondary detail layers, and blend arithmetic remain profile-specific
-  research topics unless an exact profile says otherwise.
+- Normal-map signs and packed material channels remain unknown outside the
+  exact profiles above. Ramps, emissive behavior, IBL, secondary detail
+  layers, and blend arithmetic remain profile-specific research topics.

@@ -416,6 +416,14 @@ class MaterialBuilder:
                         "metadata"
                     )
 
+        self._connect_profile_normal(
+            nodes,
+            node_tree,
+            principled,
+            preview_profile,
+            texture_nodes,
+            material,
+        )
         self._connect_profile_specular(
             nodes,
             node_tree,
@@ -486,13 +494,110 @@ class MaterialBuilder:
             nodes.active = preview_node
         return material
 
+    def _connect_profile_normal(
+        self,
+        nodes,
+        node_tree,
+        principled,
+        profile: ShaderPreviewProfile,
+        texture_nodes: dict[str, bpy.types.ShaderNodeTexImage],
+        material: bpy.types.Material,
+    ) -> None:
+        if profile.normal_sampler is None:
+            return
+        if profile.normal_y_flip is None:
+            material["kz2_preview_normal_status"] = "unvalidated-y-sign"
+            return
+        spaces = {
+            "tangent": "TANGENT",
+            "object": "OBJECT",
+            "world": "WORLD",
+        }
+        node_space = spaces.get(profile.normal_space or "")
+        if node_space is None:
+            self._warn_once(
+                f"Material profile {profile.profile_id} has invalid normal "
+                "space configuration"
+            )
+            return
+        texture = texture_nodes.get(profile.normal_sampler)
+        if texture is None or texture.image is None:
+            self._warn_once(
+                f"Normal sampler {profile.normal_sampler} could not be resolved"
+            )
+            return
+        if texture.image.colorspace_settings.name != "Non-Color":
+            self._warn_once(
+                f"Normal sampler {profile.normal_sampler} is not marked "
+                "Non-Color"
+            )
+            return
+
+        encoded_normal = texture.outputs["Color"]
+        preview_y_flip = bool(profile.normal_y_flip)
+        if node_space == "TANGENT":
+            preview_y_flip ^= self.flip_uv_v
+        if preview_y_flip:
+            separate = nodes.new("ShaderNodeSeparateColor")
+            separate.name = "KZ2_NormalChannels"
+            separate.label = "KZ2 encoded normal channels"
+            separate.mode = "RGB"
+            separate.location = (-350.0, texture.location.y - 100.0)
+            node_tree.links.new(encoded_normal, separate.inputs["Color"])
+
+            invert_y = nodes.new("ShaderNodeMath")
+            invert_y.name = "KZ2_NormalYInvert"
+            invert_y.label = "Normal Y: 1 - G"
+            invert_y.operation = "SUBTRACT"
+            invert_y.location = (-150.0, texture.location.y - 100.0)
+            invert_y.inputs[0].default_value = 1.0
+            node_tree.links.new(
+                separate.outputs["Green"],
+                invert_y.inputs[1],
+            )
+
+            combine = nodes.new("ShaderNodeCombineColor")
+            combine.name = "KZ2_NormalColor"
+            combine.label = "KZ2 Blender normal encoding"
+            combine.mode = "RGB"
+            combine.location = (40.0, texture.location.y - 100.0)
+            node_tree.links.new(
+                separate.outputs["Red"],
+                combine.inputs["Red"],
+            )
+            node_tree.links.new(
+                invert_y.outputs[0],
+                combine.inputs["Green"],
+            )
+            node_tree.links.new(
+                separate.outputs["Blue"],
+                combine.inputs["Blue"],
+            )
+            encoded_normal = combine.outputs["Color"]
+
+        normal_map = nodes.new("ShaderNodeNormalMap")
+        normal_map.name = "KZ2_NormalMap"
+        normal_map.label = f"KZ2 {profile.normal_space}-space normal"
+        normal_map.space = node_space
+        normal_map.location = (220.0, texture.location.y - 100.0)
+        if node_space == "TANGENT":
+            normal_map.uv_map = "DiffuseUV"
+        node_tree.links.new(encoded_normal, normal_map.inputs["Color"])
+        normal_socket = principled.inputs.get("Normal")
+        if normal_socket is not None:
+            node_tree.links.new(normal_map.outputs["Normal"], normal_socket)
+        material["kz2_preview_normal_status"] = "connected"
+        material["kz2_preview_normal_space"] = profile.normal_space
+        material["kz2_preview_normal_y_flip"] = preview_y_flip
+        material["kz2_normal_decode"] = "RGB * 2 - 1"
+
     def _connect_profile_specular(
         self,
         nodes,
         node_tree,
         principled,
         profile: ShaderPreviewProfile,
-        texture_nodes: dict[str, object],
+        texture_nodes: dict[str, bpy.types.ShaderNodeTexImage],
         material: bpy.types.Material,
     ) -> None:
         if (

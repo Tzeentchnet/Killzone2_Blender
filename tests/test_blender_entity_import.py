@@ -249,6 +249,28 @@ class BlenderEntityImportTests(unittest.TestCase):
             .links[0]
             .from_socket.name,
         )
+        self.assertFalse(material["kz2_profile_normal_y_flip"])
+        self.assertTrue(material["kz2_preview_normal_y_flip"])
+        self.assertTrue(principled.inputs["Normal"].is_linked)
+        normal_map = principled.inputs["Normal"].links[0].from_node
+        self.assertEqual("KZ2_NormalMap", normal_map.name)
+        self.assertEqual("TANGENT", normal_map.space)
+        self.assertEqual("DiffuseUV", normal_map.uv_map)
+        self.assertEqual(
+            "KZ2_NormalColor",
+            normal_map.inputs["Color"].links[0].from_node.name,
+        )
+        normal_texture = (
+            nodes["KZ2_NormalChannels"]
+            .inputs["Color"]
+            .links[0]
+            .from_node
+        )
+        self.assertEqual("inSampler3", normal_texture["kz2_sampler"])
+        self.assertEqual(
+            "Non-Color",
+            normal_texture.image.colorspace_settings.name,
+        )
 
     def test_static_tank_skips_unrelated_invalid_animation(self) -> None:
         from io_scene_killzone2.import_scene import (
@@ -317,7 +339,7 @@ class BlenderEntityImportTests(unittest.TestCase):
             16,
             ImportOptions(
                 source_psarc=archive_path,
-                import_materials=False,
+                import_materials=True,
                 import_animations=True,
             ),
         )
@@ -384,6 +406,77 @@ class BlenderEntityImportTests(unittest.TestCase):
         self.assertEqual("neck", helmet.parent_bone)
         self.assertEqual(0, helmet["kz2_destructibility_part_id"])
         self.assertTrue(helmet["kz2_destructibility_bone_attached"])
+        expected_profiles = {
+            "2ee5e3ff3a42dd5cd1f33374891901f0": (
+                "hgh_character_deferred_g24_5",
+                "G",
+                24.5,
+            ),
+            "3d23b1bce366078a44c0bfe6ac133f61": (
+                "hgh_character_deferred_r14_7024",
+                "R",
+                14.7024,
+            ),
+            "1de0cb0694403a758185efc552229c6d": (
+                "hgh_character_deferred_r49",
+                "R",
+                49.0,
+            ),
+            "ea746cea3656762cd8b70a78060d9654": (
+                "hgh_character_deferred_r49",
+                "R",
+                49.0,
+            ),
+        }
+        imported_materials = {
+            material["kz2_shader_object_id"]: material
+            for obj in imported_objects
+            if obj.type == "MESH"
+            for material in obj.data.materials
+            if material is not None
+            and material.get("kz2_shader_object_id") in expected_profiles
+        }
+        self.assertEqual(4, result.materials)
+        self.assertEqual(expected_profiles.keys(), imported_materials.keys())
+        for shader_object_id, (
+            profile_id,
+            power_channel,
+            power_scale,
+        ) in expected_profiles.items():
+            with self.subTest(shader_object_id=shader_object_id):
+                material = imported_materials[shader_object_id]
+                self.assertEqual(profile_id, material["kz2_profile_id"])
+                self.assertEqual(
+                    power_channel,
+                    material["kz2_profile_specular_power_channel"],
+                )
+                self.assertEqual(
+                    power_scale,
+                    material["kz2_profile_specular_power_scale"],
+                )
+                self.assertEqual(
+                    "B",
+                    material["kz2_profile_specular_intensity_channel"],
+                )
+                self.assertFalse(material["kz2_profile_normal_y_flip"])
+                self.assertTrue(material["kz2_preview_normal_y_flip"])
+                principled = next(
+                    node
+                    for node in material.node_tree.nodes
+                    if node.bl_idname == "ShaderNodeBsdfPrincipled"
+                )
+                self.assertEqual(
+                    "KZ2_NormalMap",
+                    principled.inputs["Normal"].links[0].from_node.name,
+                )
+                self.assertEqual(
+                    "KZ2_Roughness",
+                    principled.inputs["Roughness"].links[0].from_node.name,
+                )
+        self.assertEqual(
+            "ea746cea3656762cd8b70a78060d9654",
+            helmet.data.materials[0]["kz2_shader_object_id"],
+        )
         self.assertEqual(1, len(result.warnings))
         self.assertIn(
             "model could not be resolved",
