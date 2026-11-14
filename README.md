@@ -223,8 +223,8 @@ python -m unittest .\tests\test_local_archive.py -v
 Retail Blender end-to-end tests should also use the persistent resource index
 created by **Scan Entities**. The entity tests use it when configured, and the
 level tests require it. Full discovery runs a focused retail tier by default:
-the HGH Dropship, canonical Commando head/helmet attachment, and the complete
-placement hierarchy of one multiplayer map, alongside the fast synthetic
+the HGH Dropship, canonical Commando head/helmet attachment, and every
+placement record from one multiplayer map, alongside the fast synthetic
 tests.
 
 ```powershell

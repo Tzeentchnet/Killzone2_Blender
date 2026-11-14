@@ -237,6 +237,24 @@ class BlenderLevelImportTests(unittest.TestCase):
         self.assertEqual(0, result.entity_instances)
         self.assertEqual(295, len(placements))
         self.assertTrue(all(obj.type == "EMPTY" for obj in placements))
+        self.assertEqual(0, len(bpy.data.meshes))
+        self.assertEqual(
+            295,
+            len(
+                {
+                    int(obj["kz2_object_index"])
+                    for obj in placements
+                }
+            ),
+        )
+        self.assertTrue(
+            all(
+                "kz2_flags" in obj
+                and "kz2_drawable_fields" in obj
+                and "kz2_tail_fields" in obj
+                for obj in placements
+            )
+        )
         self.assertTrue(
             any(
                 collection.get("kz2_level_key") == level.key
