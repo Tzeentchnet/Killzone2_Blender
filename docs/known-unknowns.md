@@ -110,6 +110,9 @@ produce the corresponding result:
 - PSARC versions other than `0x00010003` or compression tags other than
   `zlib`;
 - an unregistered zero-sized direct serializer;
+- state-based destructibility payloads for which none of the three supported
+  layouts is credible; the intact render graph can still import, but
+  additional damage-state meshes are skipped with a warning;
 - 32-bit or non-triangle-list index buffers;
 - texture types other than 2D and cubemap;
 - texture pixel formats outside RGBA8, reversed RGBA8, DXT1/3/5, and RGBA16F;

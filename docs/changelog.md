@@ -42,6 +42,9 @@ results.
   merely because they provide a compatible shared skeleton.
 - Base `DestructibilityResource` objects no longer produce an unsupported
   damage-state warning when they contain no additional render graph.
+- Blender mesh construction now validates source topology before assigning
+  normals and UVs. Invalid or duplicate triangles are repaired with a logged
+  warning instead of being silently changed later by an interchange exporter.
 
 ### Changed
 
@@ -54,11 +57,17 @@ results.
 ### Validation
 
 - The complete Python 3.12 suite passed against the supported retail archive:
-  **92 tests, zero failures, 14 Blender-only skips**.
+  **93 tests, zero failures, 15 Blender-only skips**.
 - The complete Python 3.13 and `bpy` 5.2.2 suite passed with a freshly built
-  retail resource index: **92 tests, zero failures, zero skips**.
+  retail resource index: **93 tests, zero failures, zero skips**.
 - Retail dropship validation imports 19 meshes, three armatures, ten Actions,
   and two helper-attached turret placements that move with the body rig.
+- Packaged-extension operator tests import and save both canonical Dropships,
+  then round-trip their GLB exports in a fresh Blender process. HGH preserves
+  19 meshes, 33,632 triangles, three armatures with 3/3/43 bones, all ten
+  Actions and the animated turret hierarchy. ISA Intruder preserves 17
+  meshes, 27,161 triangles, its 40-bone armature, and its Action. Its
+  unsupported damage-state layout remains explicitly warned and skipped.
 - Retail commando validation imports the intact body, head, and helmet on one
   shared 91-bone armature in rest pose, excludes five disabled damage
   fragments, imports no unrelated Actions, and verifies all four exact

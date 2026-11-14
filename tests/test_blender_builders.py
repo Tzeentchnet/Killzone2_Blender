@@ -81,6 +81,42 @@ class BlenderBuilderTests(unittest.TestCase):
                 self.assertAlmostEqual(expected[0], observed[0], places=6)
                 self.assertAlmostEqual(expected[1], observed[1], places=6)
 
+    def test_mesh_builder_repairs_duplicate_triangles(self) -> None:
+        from io_scene_killzone2.kz2_assets.model import VertexSemantic
+
+        streams, primitive, _index_array = _mesh_inputs(
+            self.import_scene,
+            VertexSemantic,
+        )
+        index_array = types.SimpleNamespace(
+            indexes=(0, 1, 2, 2, 0, 1, 1, 3, 2)
+        )
+        original = self.import_scene.decode_semantic
+        self.import_scene.decode_semantic = lambda _array, semantic: streams.get(
+            semantic
+        )
+        try:
+            with self.assertLogs(
+                self.import_scene._LOG,
+                level="WARNING",
+            ) as captured:
+                mesh = self.import_scene._create_mesh_data(
+                    "duplicate_test",
+                    primitive,
+                    object(),
+                    index_array,
+                    self.import_scene.ImportOptions(),
+                )
+        finally:
+            self.import_scene.decode_semantic = original
+
+        self.assertEqual(2, len(mesh.polygons))
+        self.assertFalse(mesh.validate(clean_customdata=False))
+        self.assertIn(
+            "duplicate_test: repaired invalid or duplicate triangle geometry",
+            captured.output[0],
+        )
+
     def test_skin_weights_are_batched_without_changing_values(self) -> None:
         mesh = bpy.data.meshes.new("skin_test")
         mesh.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], (), [(0, 1, 2)])

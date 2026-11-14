@@ -100,6 +100,12 @@ signed `i32` index count, eight unknown bytes, and `index_count` big-endian
 supports 16-bit triangle lists only; it does not infer strips, fans, or 32-bit
 index buffers.
 
+After constructing Blender faces, the importer validates the resulting mesh
+before assigning custom normals and UV layers. Invalid or exactly duplicated
+triangle topology is repaired and logged. This prevents Blender exporters
+from silently applying the same repair later; retail examples include one
+duplicated face in an ISA Intruder skinned submesh.
+
 `PrimitiveResource` contains:
 
 1. resource prefix;

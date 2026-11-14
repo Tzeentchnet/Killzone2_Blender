@@ -2641,6 +2641,11 @@ def _create_mesh_data(
 
     mesh_data = bpy.data.meshes.new(name)
     mesh_data.from_pydata(scaled, (), faces)
+    if mesh_data.validate(clean_customdata=False):
+        _LOG.warning(
+            "%s: repaired invalid or duplicate triangle geometry",
+            name,
+        )
     mesh_data.update(calc_edges=True)
 
     normals = normal_override
