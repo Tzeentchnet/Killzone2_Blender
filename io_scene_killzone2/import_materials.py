@@ -28,6 +28,8 @@ from .kz2_assets.model import (
 from .kz2_assets.resolver import ResolvedResource, ResourceResolver
 from .kz2_assets.textures import decode_texture_surface
 
+KZ2_VERTEX_COLOR_ATTRIBUTE = "KZ2Color"
+
 
 @dataclass(slots=True)
 class MaterialBuilder:
@@ -37,7 +39,7 @@ class MaterialBuilder:
     flip_uv_v: bool = True
     images_created: int = 0
     materials_created: int = 0
-    _images: dict[tuple[str, int], bpy.types.Image | None] = field(
+    _images: dict[tuple[str, int, bool], bpy.types.Image | None] = field(
         default_factory=dict
     )
     _materials: dict[tuple[str, int, int], bpy.types.Material] = field(
@@ -75,8 +77,7 @@ class MaterialBuilder:
         if resolved is None:
             if reference.external_id is not None:
                 self._warn_once(
-                    f"Render effect {reference.external_id!r} could not be "
-                    "resolved"
+                    f"Render effect {reference.external_id!r} could not be resolved"
                 )
             return None
         key = (
@@ -92,8 +93,7 @@ class MaterialBuilder:
         decoded = resolved.value
         if not isinstance(decoded, RenderEffect):
             self._warn_once(
-                f"{record.type_name} {record.display_id} is not a decoded "
-                "render effect"
+                f"{record.type_name} {record.display_id} is not a decoded render effect"
             )
             return None
         if not decoded.techniques:
@@ -101,8 +101,7 @@ class MaterialBuilder:
             return None
         if not 0 <= technique_index < len(decoded.techniques):
             self._warn_once(
-                f"Render effect {record.display_id} has no technique "
-                f"{technique_index}"
+                f"Render effect {record.display_id} has no technique {technique_index}"
             )
             return None
 
@@ -161,26 +160,15 @@ class MaterialBuilder:
                 ):
                     node.image = image
                     node["kz2_mip_bias"] = texture_override.mip_bias
-                    node["kz2_mip_bias_bits"] = (
-                        texture_override.mip_bias_bits
-                    )
-                    node["kz2_sampler_state"] = (
-                        texture_override.packed_sampler_state
-                    )
+                    node["kz2_mip_bias_bits"] = texture_override.mip_bias_bits
+                    node["kz2_sampler_state"] = texture_override.packed_sampler_state
                     node.interpolation = (
                         "Closest"
-                        if (
-                            texture_override.packed_sampler_state & 0xF
-                        )
-                        in (0, 1)
+                        if (texture_override.packed_sampler_state & 0xF) in (0, 1)
                         else "Linear"
                     )
-                    address_u = (
-                        texture_override.packed_sampler_state >> 4
-                    ) & 0xF
-                    address_v = (
-                        texture_override.packed_sampler_state >> 8
-                    ) & 0xF
+                    address_u = (texture_override.packed_sampler_state >> 4) & 0xF
+                    address_v = (texture_override.packed_sampler_state >> 8) & 0xF
                     if address_u == 1 and address_v == 1:
                         node.extension = "EXTEND"
                     elif address_u == 2 and address_v == 2:
@@ -190,10 +178,7 @@ class MaterialBuilder:
                     node.label = (
                         f"{texture_override.sampler} (instance override)"
                         if image is not None
-                        else (
-                            f"{texture_override.sampler} "
-                            "(unresolved override)"
-                        )
+                        else (f"{texture_override.sampler} (unresolved override)")
                     )
         for variable_override in variable_overrides:
             material[f"kz2_variable_override_{variable_override.variable}"] = (
@@ -221,9 +206,7 @@ class MaterialBuilder:
         decoder: CoreDecoder,
     ) -> bpy.types.Material:
         base_name = effect.prefix.name or f"KZ2_{record.display_id[:12]}"
-        material = bpy.data.materials.new(
-            f"{base_name}_T{technique_index:02d}"
-        )
+        material = bpy.data.materials.new(f"{base_name}_T{technique_index:02d}")
         # Blender 5.x materials always own a node tree; Material.use_nodes is
         # deprecated and scheduled for removal in Blender 6.0.
         material.diffuse_color = (0.8, 0.8, 0.8, 1.0)
@@ -233,9 +216,7 @@ class MaterialBuilder:
         material["kz2_technique_index"] = technique_index
         material["kz2_technique_count"] = len(effect.techniques)
         material["kz2_render_state"] = technique.render_state.raw.hex()
-        material["kz2_reflection_sampler_bias"] = (
-            technique.reflection_sampler_bias
-        )
+        material["kz2_reflection_sampler_bias"] = technique.reflection_sampler_bias
         material["kz2_render_effect_trailing"] = effect.trailing.hex()
         self._set_shader_properties(material, technique, decoder)
         shader_hash = material.get("kz2_shader_body_sha256")
@@ -244,13 +225,10 @@ class MaterialBuilder:
             shader_hash if isinstance(shader_hash, str) else None,
             tuple(binding.sampler for binding in technique.texture_bindings),
             shader_object_id=(
-                shader_object_id
-                if isinstance(shader_object_id, str)
-                else None
+                shader_object_id if isinstance(shader_object_id, str) else None
             ),
             variable_signature=tuple(
-                variable.shader_input
-                for variable in technique.variable_bindings
+                variable.shader_input for variable in technique.variable_bindings
             ),
             technique_index=technique_index,
         )
@@ -258,9 +236,7 @@ class MaterialBuilder:
         if preview_profile.profile_id is not None:
             material["kz2_profile_id"] = preview_profile.profile_id
         if preview_profile.normal_sampler is not None:
-            material["kz2_profile_normal_sampler"] = (
-                preview_profile.normal_sampler
-            )
+            material["kz2_profile_normal_sampler"] = preview_profile.normal_sampler
             material["kz2_profile_normal_space"] = (
                 preview_profile.normal_space or "unknown"
             )
@@ -273,17 +249,13 @@ class MaterialBuilder:
             material["kz2_profile_detail_normal_sampler"] = (
                 preview_profile.detail_normal_sampler
             )
-            material["kz2_preview_detail_normal"] = (
-                "retained unconnected"
-            )
+            material["kz2_preview_detail_normal"] = "retained unconnected"
         if preview_profile.secondary_base_color_sampler is not None:
             material["kz2_profile_secondary_base_color_sampler"] = (
                 preview_profile.secondary_base_color_sampler
             )
         if preview_profile.material_sampler is not None:
-            material["kz2_profile_material_sampler"] = (
-                preview_profile.material_sampler
-            )
+            material["kz2_profile_material_sampler"] = preview_profile.material_sampler
         if preview_profile.reflection_sampler is not None:
             material["kz2_profile_reflection_sampler"] = (
                 preview_profile.reflection_sampler
@@ -299,9 +271,36 @@ class MaterialBuilder:
             material["kz2_profile_specular_intensity_channel"] = (
                 preview_profile.specular_intensity_channel
             )
-        material["kz2_preview_diffuse_v_flip"] = (
-            preview_profile.flip_diffuse_v
-        )
+        if preview_profile.retained_sampler_roles:
+            material["kz2_profile_retained_sampler_roles"] = "; ".join(
+                f"{sampler}: {role}"
+                for sampler, role in preview_profile.retained_sampler_roles
+            )
+        if preview_profile.non_color_samplers:
+            material["kz2_profile_non_color_samplers"] = ", ".join(
+                preview_profile.non_color_samplers
+            )
+        if preview_profile.opacity_expression != "texture_alpha":
+            material["kz2_profile_opacity_expression"] = (
+                preview_profile.opacity_expression
+            )
+        if preview_profile.base_color_vertex_color_power is not None:
+            material["kz2_profile_vertex_color_power"] = (
+                preview_profile.base_color_vertex_color_power
+            )
+        if preview_profile.vertex_color_emission_power is not None:
+            material["kz2_profile_vertex_emission_power"] = (
+                preview_profile.vertex_color_emission_power
+            )
+        if preview_profile.preview_composition is not None:
+            material["kz2_profile_composition"] = (
+                preview_profile.preview_composition
+            )
+        if preview_profile.surface_render_method is not None:
+            material.surface_render_method = (
+                preview_profile.surface_render_method
+            )
+        material["kz2_preview_diffuse_v_flip"] = preview_profile.flip_diffuse_v
 
         node_tree = material.node_tree
         nodes = node_tree.nodes
@@ -362,7 +361,12 @@ class MaterialBuilder:
                 else None
             )
             if resolved_texture is not None:
-                node.image = self._image_for(resolved_texture)
+                node.image = self._image_for(
+                    resolved_texture,
+                    force_non_color=(
+                        preview_profile.sampler_uses_non_color_data(binding.sampler)
+                    ),
+                )
             if node.image is None:
                 node.label = f"{binding.sampler} (unresolved)"
 
@@ -400,14 +404,11 @@ class MaterialBuilder:
                 )
                 material["kz2_preview_base_color"] = binding.sampler
                 material["kz2_preview_base_color_source"] = (
-                    "shader_profile"
-                    if is_profile_base_color
-                    else "srgb_heuristic"
+                    "shader_profile" if is_profile_base_color else "srgb_heuristic"
                 )
                 material["kz2_preview_uv_map"] = base_color_uv_map
             if (
-                preview_profile.secondary_base_color_sampler
-                == binding.sampler
+                preview_profile.secondary_base_color_sampler == binding.sampler
                 and node.image is not None
             ):
                 secondary_base_color_output = node.outputs["Color"]
@@ -428,9 +429,7 @@ class MaterialBuilder:
                 node["kz2_profile_role"] = "packed YUV lightmap"
                 node.label = f"{binding.sampler} (packed YUV lightmap)"
                 material["kz2_lightmap_decode"] = "KZ2_LightmapYUV_v1"
-                material["kz2_lightmap_sun_occlusion"] = (
-                    "preserved node-group output"
-                )
+                material["kz2_lightmap_sun_occlusion"] = "preserved node-group output"
                 if (
                     texture is not None
                     and texture.color_space == TextureColorSpace.SRGB
@@ -442,10 +441,7 @@ class MaterialBuilder:
                         "metadata"
                     )
 
-        if (
-            base_color_output is not None
-            and secondary_base_color_output is not None
-        ):
+        if base_color_output is not None and secondary_base_color_output is not None:
             base_color_mix = nodes.new("ShaderNodeMixRGB")
             base_color_mix.name = "KZ2_BaseColorMultiply"
             base_color_mix.label = "Shader profile: base * secondary"
@@ -463,6 +459,16 @@ class MaterialBuilder:
             base_color_output = base_color_mix.outputs["Color"]
             material["kz2_preview_base_color_combine"] = "multiply"
 
+        base_color_output, opacity_output = self._connect_profile_composition(
+            nodes,
+            node_tree,
+            preview_profile,
+            texture_nodes,
+            material,
+            base_color_output,
+            opacity_output,
+        )
+
         self._connect_profile_normal(
             nodes,
             node_tree,
@@ -479,10 +485,14 @@ class MaterialBuilder:
             texture_nodes,
             material,
         )
-        if (
-            base_color_binding_index is not None
-            and base_color_sampler is not None
-        ):
+        self._connect_profile_vertex_emission(
+            nodes,
+            node_tree,
+            principled,
+            preview_profile,
+            material,
+        )
+        if base_color_binding_index is not None and base_color_sampler is not None:
             self._connect_diffuse_coordinates(
                 nodes,
                 node_tree,
@@ -537,13 +547,9 @@ class MaterialBuilder:
                 indirect_light_output,
                 surface_output,
             )
-            material["kz2_lightmap_preview"] = (
-                "decoded indirect emission approximation"
-            )
+            material["kz2_lightmap_preview"] = "decoded indirect emission approximation"
         elif lightmap_binding_index is not None:
-            material["kz2_lightmap_preview"] = (
-                "decoded outputs retained unconnected"
-            )
+            material["kz2_lightmap_preview"] = "decoded outputs retained unconnected"
         node_tree.links.new(surface_output, output.inputs["Surface"])
         if base_color_sampler is not None:
             preview_node = texture_nodes[base_color_sampler]
@@ -552,6 +558,735 @@ class MaterialBuilder:
             preview_node.select = True
             nodes.active = preview_node
         return material
+
+    def _connect_profile_composition(
+        self,
+        nodes,
+        node_tree,
+        profile: ShaderPreviewProfile,
+        texture_nodes: dict[str, bpy.types.ShaderNodeTexImage],
+        material: bpy.types.Material,
+        base_color_output,
+        opacity_output,
+    ):
+        if profile.preview_composition is not None:
+            if profile.preview_composition == "new_sun_layered_sky":
+                return self._connect_new_sun_layered_sky(
+                    nodes,
+                    node_tree,
+                    texture_nodes,
+                    material,
+                )
+            self._warn_once(
+                f"Material profile {profile.profile_id} has unsupported "
+                f"composition {profile.preview_composition}"
+            )
+            return base_color_output, opacity_output
+
+        needs_vertex_color = (
+            profile.base_color_vertex_color_power is not None
+            or profile.opacity_expression != "texture_alpha"
+        )
+        vertex_color = (
+            self._vertex_color_node(nodes)
+            if needs_vertex_color
+            else None
+        )
+        if (
+            base_color_output is not None
+            and vertex_color is not None
+            and profile.base_color_vertex_color_power is not None
+        ):
+            if profile.base_color_vertex_color_power != 2.0:
+                self._warn_once(
+                    f"Material profile {profile.profile_id} has unsupported "
+                    "vertex-color power"
+                )
+            else:
+                squared = nodes.new("ShaderNodeVectorMath")
+                squared.name = "KZ2_VertexColorSquared"
+                squared.label = "Source vertex RGB squared"
+                squared.operation = "MULTIPLY"
+                squared.location = (-140.0, 360.0)
+                node_tree.links.new(
+                    vertex_color.outputs["Color"],
+                    squared.inputs[0],
+                )
+                node_tree.links.new(
+                    vertex_color.outputs["Color"],
+                    squared.inputs[1],
+                )
+                multiply = nodes.new("ShaderNodeVectorMath")
+                multiply.name = "KZ2_NewSunVertexColorModulate"
+                multiply.label = "Texture RGB * squared vertex RGB"
+                multiply.operation = "MULTIPLY"
+                multiply.location = (100.0, 320.0)
+                node_tree.links.new(base_color_output, multiply.inputs[0])
+                node_tree.links.new(
+                    squared.outputs["Vector"],
+                    multiply.inputs[1],
+                )
+                base_color_output = multiply.outputs["Vector"]
+                material["kz2_preview_vertex_color"] = "RGB squared modulation"
+
+        if (
+            opacity_output is not None
+            and vertex_color is not None
+            and profile.opacity_expression == "texture_alpha_times_vertex_alpha"
+        ):
+            multiply = nodes.new("ShaderNodeMath")
+            multiply.name = "KZ2_NewSunVertexAlpha"
+            multiply.label = "Texture alpha * vertex alpha"
+            multiply.operation = "MULTIPLY"
+            multiply.location = (120.0, -300.0)
+            node_tree.links.new(opacity_output, multiply.inputs[0])
+            node_tree.links.new(
+                vertex_color.outputs["Alpha"],
+                multiply.inputs[1],
+            )
+            opacity_output = multiply.outputs[0]
+        elif (
+            opacity_output is not None
+            and vertex_color is not None
+            and profile.opacity_expression
+            == "one_minus_vertex_alpha_over_texture_alpha"
+        ):
+            denominator = nodes.new("ShaderNodeMath")
+            denominator.name = "KZ2_NewSunAlphaDenominator"
+            denominator.label = "max(texture alpha, epsilon)"
+            denominator.operation = "MAXIMUM"
+            denominator.location = (-80.0, -380.0)
+            denominator.inputs[1].default_value = 1.0e-6
+            node_tree.links.new(opacity_output, denominator.inputs[0])
+
+            divide = nodes.new("ShaderNodeMath")
+            divide.name = "KZ2_NewSunVertexAlphaRatio"
+            divide.label = "Vertex alpha / texture alpha"
+            divide.operation = "DIVIDE"
+            divide.location = (100.0, -380.0)
+            node_tree.links.new(
+                vertex_color.outputs["Alpha"],
+                divide.inputs[0],
+            )
+            node_tree.links.new(denominator.outputs[0], divide.inputs[1])
+
+            invert = nodes.new("ShaderNodeMath")
+            invert.name = "KZ2_NewSunInverseAlpha"
+            invert.label = "1 - vertex alpha / texture alpha"
+            invert.operation = "SUBTRACT"
+            invert.use_clamp = True
+            invert.location = (280.0, -380.0)
+            invert.inputs[0].default_value = 1.0
+            node_tree.links.new(divide.outputs[0], invert.inputs[1])
+            opacity_output = invert.outputs[0]
+        elif profile.opacity_expression != "texture_alpha":
+            self._warn_once(
+                f"Material profile {profile.profile_id} has unsupported "
+                f"opacity expression {profile.opacity_expression}"
+            )
+
+        return base_color_output, opacity_output
+
+    def _connect_new_sun_layered_sky(
+        self,
+        nodes,
+        node_tree,
+        texture_nodes: dict[str, bpy.types.ShaderNodeTexImage],
+        material: bpy.types.Material,
+    ):
+        required = {f"inSampler{index}" for index in range(8)}
+        missing = sorted(required.difference(texture_nodes))
+        if missing:
+            self._warn_once(
+                "New Sun layered sky profile is missing samplers "
+                + ", ".join(missing)
+            )
+            return None, None
+
+        def math_node(
+            name,
+            label,
+            operation,
+            left,
+            right,
+            location,
+            *,
+            clamp=False,
+        ):
+            node = nodes.new("ShaderNodeMath")
+            node.name = name
+            node.label = label
+            node.operation = operation
+            node.use_clamp = clamp
+            node.location = location
+            for socket, value in zip(node.inputs[:2], (left, right)):
+                if isinstance(value, (int, float)):
+                    socket.default_value = value
+                else:
+                    node_tree.links.new(value, socket)
+            return node.outputs[0]
+
+        def vector_node(name, label, operation, left, right, location):
+            node = nodes.new("ShaderNodeVectorMath")
+            node.name = name
+            node.label = label
+            node.operation = operation
+            node.location = location
+            for socket, value in zip(node.inputs[:2], (left, right)):
+                if isinstance(value, tuple):
+                    socket.default_value = value
+                else:
+                    node_tree.links.new(value, socket)
+            return node.outputs["Vector"]
+
+        def combine_node(name, label, values, location):
+            node = nodes.new("ShaderNodeCombineXYZ")
+            node.name = name
+            node.label = label
+            node.location = location
+            for socket, value in zip(node.inputs, values):
+                if isinstance(value, (int, float)):
+                    socket.default_value = value
+                else:
+                    node_tree.links.new(value, socket)
+            return node.outputs["Vector"]
+
+        def separate_color(name, label, color, location):
+            node = nodes.new("ShaderNodeSeparateColor")
+            node.name = name
+            node.label = label
+            node.mode = "RGB"
+            node.location = location
+            node_tree.links.new(color, node.inputs["Color"])
+            return node
+
+        def mapping_node(name, label, texture, scale, offset, location):
+            node = nodes.new("ShaderNodeMapping")
+            node.name = name
+            node.label = label
+            node.location = location
+            node.inputs["Scale"].default_value = (*scale, 1.0)
+            node.inputs["Location"].default_value = (*offset, 0.0)
+            node_tree.links.new(uv.outputs["UV"], node.inputs["Vector"])
+            node_tree.links.new(
+                node.outputs["Vector"],
+                texture.inputs["Vector"],
+            )
+
+        uv = nodes.new("ShaderNodeUVMap")
+        uv.name = "KZ2_NewSunSkyUV"
+        uv.label = "New Sun source UV0"
+        uv.uv_map = "UV0"
+        uv.location = (-1450.0, 0.0)
+        uv_channels = nodes.new("ShaderNodeSeparateXYZ")
+        uv_channels.name = "KZ2_NewSunSkyUVChannels"
+        uv_channels.location = (-1250.0, -760.0)
+        node_tree.links.new(uv.outputs["UV"], uv_channels.inputs["Vector"])
+
+        sampler1 = texture_nodes["inSampler1"]
+        sampler1_secondary = nodes.new("ShaderNodeTexImage")
+        sampler1_secondary.name = "KZ2_NewSunSampler1Secondary"
+        sampler1_secondary.label = "inSampler1 (secondary coordinate)"
+        sampler1_secondary.location = (-650.0, -1880.0)
+        sampler1_secondary.image = sampler1.image
+        sampler1_secondary.interpolation = sampler1.interpolation
+        sampler1_secondary.extension = sampler1.extension
+        sampler1_secondary.projection = sampler1.projection
+        sampler1_secondary["kz2_sampler"] = "inSampler1"
+        sampler1_secondary["kz2_secondary_sample"] = True
+        for key in (
+            "kz2_mip_bias",
+            "kz2_mip_bias_bits",
+            "kz2_sampler_state",
+        ):
+            if key in sampler1:
+                sampler1_secondary[key] = sampler1[key]
+
+        mapping_node(
+            "KZ2_NewSunSampler1PrimaryUV",
+            "TC3.zw",
+            sampler1,
+            (-0.35, 0.525),
+            (-0.35, 0.475),
+            (-1050.0, sampler1.location.y),
+        )
+        mapping_node(
+            "KZ2_NewSunSampler1SecondaryUV",
+            "TC3.xy",
+            sampler1_secondary,
+            (0.35, 0.0),
+            (-0.35, 1.0),
+            (-1050.0, sampler1_secondary.location.y),
+        )
+        mapping_node(
+            "KZ2_NewSunSampler2UV",
+            "TC5.zw",
+            texture_nodes["inSampler2"],
+            (-0.35, -0.35),
+            (-0.35, 1.35),
+            (-1050.0, texture_nodes["inSampler2"].location.y),
+        )
+        mapping_node(
+            "KZ2_NewSunSampler3UV",
+            "TC4.zw",
+            texture_nodes["inSampler3"],
+            (1.05, -1.05),
+            (-0.35, 2.575),
+            (-1050.0, texture_nodes["inSampler3"].location.y),
+        )
+        mapping_node(
+            "KZ2_NewSunSampler4UV",
+            "TC4.xy",
+            texture_nodes["inSampler4"],
+            (-2.8, -3.15),
+            (-0.35, 4.15),
+            (-1050.0, texture_nodes["inSampler4"].location.y),
+        )
+        mapping_node(
+            "KZ2_NewSunSampler7UV",
+            "TC5.xy",
+            texture_nodes["inSampler7"],
+            (-1.05, 0.7),
+            (-0.35, 0.3),
+            (-1050.0, texture_nodes["inSampler7"].location.y),
+        )
+
+        sampler0_coordinates = combine_node(
+            "KZ2_NewSunSampler0UV",
+            "TC2.xy default",
+            (-0.35, 1.175, 0.0),
+            (-1050.0, texture_nodes["inSampler0"].location.y),
+        )
+        node_tree.links.new(
+            sampler0_coordinates,
+            texture_nodes["inSampler0"].inputs["Vector"],
+        )
+
+        sampler1_primary_channels = separate_color(
+            "KZ2_NewSunSampler1PrimaryChannels",
+            "Primary cloud-coordinate mask",
+            sampler1.outputs["Color"],
+            (-420.0, -1050.0),
+        )
+        sampler1_secondary_channels = separate_color(
+            "KZ2_NewSunSampler1SecondaryChannels",
+            "Secondary opacity mask",
+            sampler1_secondary.outputs["Color"],
+            (-420.0, -1840.0),
+        )
+        sampler2_channels = separate_color(
+            "KZ2_NewSunSampler2Channels",
+            "Primary sky channels",
+            texture_nodes["inSampler2"].outputs["Color"],
+            (-420.0, 260.0),
+        )
+        sampler5_channels = separate_color(
+            "KZ2_NewSunSampler5Channels",
+            "Sky blend factor",
+            texture_nodes["inSampler5"].outputs["Color"],
+            (-420.0, -720.0),
+        )
+        sampler7_channels = separate_color(
+            "KZ2_NewSunSampler7Channels",
+            "Primary sky modulation",
+            texture_nodes["inSampler7"].outputs["Color"],
+            (-420.0, -1380.0),
+        )
+        sampler0_channels = separate_color(
+            "KZ2_NewSunSampler0Channels",
+            "Animated opacity threshold",
+            texture_nodes["inSampler0"].outputs["Color"],
+            (-420.0, -2160.0),
+        )
+
+        sampler5_y = math_node(
+            "KZ2_NewSunSampler5V",
+            "1.02 - UV.y",
+            "SUBTRACT",
+            1.02,
+            uv_channels.outputs["Y"],
+            (-1050.0, -720.0),
+        )
+        sampler5_coordinates = combine_node(
+            "KZ2_NewSunSampler5UV",
+            "Fragment-derived sampler5 coordinates",
+            (
+                sampler1_primary_channels.outputs["Red"],
+                sampler5_y,
+                0.0,
+            ),
+            (-850.0, -720.0),
+        )
+        node_tree.links.new(
+            sampler5_coordinates,
+            texture_nodes["inSampler5"].inputs["Vector"],
+        )
+
+        sampler6_x_offset = math_node(
+            "KZ2_NewSunSampler6XOffset",
+            "Sampler2.R * 0.1",
+            "MULTIPLY",
+            sampler2_channels.outputs["Red"],
+            0.1,
+            (-1050.0, -1120.0),
+        )
+        sampler6_x = math_node(
+            "KZ2_NewSunSampler6U",
+            "UV.x + cloud offset",
+            "ADD",
+            uv_channels.outputs["X"],
+            sampler6_x_offset,
+            (-850.0, -1120.0),
+        )
+        sampler6_y_scaled = math_node(
+            "KZ2_NewSunSampler6VScale",
+            "UV.y * -4",
+            "MULTIPLY",
+            uv_channels.outputs["Y"],
+            -4.0,
+            (-1050.0, -1240.0),
+        )
+        sampler6_y = math_node(
+            "KZ2_NewSunSampler6V",
+            "4.008 - 4 * UV.y",
+            "ADD",
+            sampler6_y_scaled,
+            4.008,
+            (-850.0, -1240.0),
+        )
+        sampler6_coordinates = combine_node(
+            "KZ2_NewSunSampler6UV",
+            "Fragment-derived sampler6 coordinates",
+            (sampler6_x, sampler6_y, 0.0),
+            (-650.0, -1200.0),
+        )
+        node_tree.links.new(
+            sampler6_coordinates,
+            texture_nodes["inSampler6"].inputs["Vector"],
+        )
+
+        vertex_color = self._vertex_color_node(nodes)
+        vertex_squared = vector_node(
+            "KZ2_NewSunVertexColorSquared",
+            "Source vertex RGB squared",
+            "MULTIPLY",
+            vertex_color.outputs["Color"],
+            vertex_color.outputs["Color"],
+            (-360.0, 820.0),
+        )
+        vertex_channels = nodes.new("ShaderNodeSeparateXYZ")
+        vertex_channels.name = "KZ2_NewSunVertexChannels"
+        vertex_channels.location = (-140.0, 820.0)
+        node_tree.links.new(
+            vertex_squared,
+            vertex_channels.inputs["Vector"],
+        )
+
+        sampler7_green_scale = math_node(
+            "KZ2_NewSunSampler7GreenScale",
+            "Sampler7.R * 0.563833",
+            "MULTIPLY",
+            sampler7_channels.outputs["Red"],
+            0.563833,
+            (-140.0, 640.0),
+        )
+        sampler7_green = math_node(
+            "KZ2_NewSunSampler7Green",
+            "1 - green modulation",
+            "SUBTRACT",
+            1.0,
+            sampler7_green_scale,
+            (40.0, 640.0),
+        )
+        sampler7_blue = math_node(
+            "KZ2_NewSunSampler7Blue",
+            "1 - blue modulation",
+            "SUBTRACT",
+            1.0,
+            sampler7_channels.outputs["Red"],
+            (40.0, 560.0),
+        )
+        primary_tint = combine_node(
+            "KZ2_NewSunPrimaryTint",
+            "Primary sky tint",
+            (1.0, sampler7_green, sampler7_blue),
+            (220.0, 620.0),
+        )
+        primary_tinted = vector_node(
+            "KZ2_NewSunPrimaryTinted",
+            "Sampler2 * primary tint",
+            "MULTIPLY",
+            texture_nodes["inSampler2"].outputs["Color"],
+            primary_tint,
+            (420.0, 620.0),
+        )
+        primary_weight = math_node(
+            "KZ2_NewSunPrimaryWeight",
+            "1 - squared vertex green",
+            "SUBTRACT",
+            1.0,
+            vertex_channels.outputs["Y"],
+            (220.0, 500.0),
+        )
+        primary_weight_vector = combine_node(
+            "KZ2_NewSunPrimaryWeightVector",
+            "Primary sky weight",
+            (primary_weight, primary_weight, primary_weight),
+            (420.0, 500.0),
+        )
+        primary_color = vector_node(
+            "KZ2_NewSunPrimaryColor",
+            "Weighted primary sky",
+            "MULTIPLY",
+            primary_tinted,
+            primary_weight_vector,
+            (620.0, 600.0),
+        )
+
+        secondary_product = vector_node(
+            "KZ2_NewSunSecondaryProduct",
+            "Sampler3 * sampler4",
+            "MULTIPLY",
+            texture_nodes["inSampler3"].outputs["Color"],
+            texture_nodes["inSampler4"].outputs["Color"],
+            (220.0, 300.0),
+        )
+        secondary_color = vector_node(
+            "KZ2_NewSunSecondaryColor",
+            "Secondary sky + source bias",
+            "ADD",
+            secondary_product,
+            (0.3, 0.2378, 0.0),
+            (420.0, 300.0),
+        )
+
+        sampler5_scale = math_node(
+            "KZ2_NewSunSampler5Scale",
+            "Sampler5.R * 20",
+            "MULTIPLY",
+            sampler5_channels.outputs["Red"],
+            20.0,
+            (40.0, 160.0),
+        )
+        sampler1_scale = math_node(
+            "KZ2_NewSunSampler1Scale",
+            "Sampler1.R * 0.04",
+            "MULTIPLY",
+            sampler1_primary_channels.outputs["Red"],
+            0.04,
+            (40.0, 80.0),
+        )
+        blend_sum = math_node(
+            "KZ2_NewSunBlendSum",
+            "Sky blend response",
+            "ADD",
+            sampler5_scale,
+            sampler1_scale,
+            (220.0, 120.0),
+        )
+        blend_factor = math_node(
+            "KZ2_NewSunBlendFactor",
+            "Vertex alpha * sky blend response",
+            "MULTIPLY",
+            vertex_color.outputs["Alpha"],
+            blend_sum,
+            (420.0, 120.0),
+        )
+        inverse_blend = math_node(
+            "KZ2_NewSunInverseBlend",
+            "1 - sky blend factor",
+            "SUBTRACT",
+            1.0,
+            blend_factor,
+            (600.0, 80.0),
+        )
+        blend_vector = combine_node(
+            "KZ2_NewSunBlendVector",
+            "Sky blend factor",
+            (blend_factor, blend_factor, blend_factor),
+            (620.0, 180.0),
+        )
+        inverse_blend_vector = combine_node(
+            "KZ2_NewSunInverseBlendVector",
+            "Inverse sky blend factor",
+            (inverse_blend, inverse_blend, inverse_blend),
+            (780.0, 80.0),
+        )
+        primary_blend = vector_node(
+            "KZ2_NewSunPrimaryBlend",
+            "Primary * (1 - factor)",
+            "MULTIPLY",
+            primary_color,
+            inverse_blend_vector,
+            (820.0, 520.0),
+        )
+        secondary_blend = vector_node(
+            "KZ2_NewSunSecondaryBlend",
+            "Secondary * factor",
+            "MULTIPLY",
+            secondary_color,
+            blend_vector,
+            (820.0, 300.0),
+        )
+        layered_color = vector_node(
+            "KZ2_NewSunLayeredColor",
+            "Primary + secondary sky",
+            "ADD",
+            primary_blend,
+            secondary_blend,
+            (1020.0, 420.0),
+        )
+
+        inverse_red = math_node(
+            "KZ2_NewSunInverseVertexRed",
+            "1 - squared vertex red",
+            "SUBTRACT",
+            1.0,
+            vertex_channels.outputs["X"],
+            (600.0, -100.0),
+        )
+        inverse_red_vector = combine_node(
+            "KZ2_NewSunInverseVertexRedVector",
+            "Inverse squared vertex red",
+            (inverse_red, inverse_red, inverse_red),
+            (780.0, -100.0),
+        )
+        modulated_color = vector_node(
+            "KZ2_NewSunModulatedColor",
+            "Sampler6 * inverse vertex red",
+            "MULTIPLY",
+            texture_nodes["inSampler6"].outputs["Color"],
+            inverse_red_vector,
+            (980.0, -60.0),
+        )
+        vertex_red_vector = combine_node(
+            "KZ2_NewSunVertexRedVector",
+            "Squared vertex red",
+            (
+                vertex_channels.outputs["X"],
+                vertex_channels.outputs["X"],
+                vertex_channels.outputs["X"],
+            ),
+            (980.0, -180.0),
+        )
+        final_modulation = vector_node(
+            "KZ2_NewSunFinalModulation",
+            "Vertex red + sampler6 modulation",
+            "ADD",
+            modulated_color,
+            vertex_red_vector,
+            (1180.0, -80.0),
+        )
+        final_color = vector_node(
+            "KZ2_NewSunSkyFinalColor",
+            "Layered sky * final modulation",
+            "MULTIPLY",
+            layered_color,
+            final_modulation,
+            (1260.0, 300.0),
+        )
+
+        opacity_mask_scale = math_node(
+            "KZ2_NewSunOpacityMaskScale",
+            "Sampler1.B * 14.2857",
+            "MULTIPLY",
+            sampler1_secondary_channels.outputs["Blue"],
+            14.2857,
+            (600.0, -360.0),
+        )
+        opacity_mask = math_node(
+            "KZ2_NewSunOpacityMask",
+            "Scaled sampler1 mask * squared vertex blue",
+            "MULTIPLY",
+            opacity_mask_scale,
+            vertex_channels.outputs["Z"],
+            (780.0, -360.0),
+            clamp=True,
+        )
+        opacity_vertex_blue = math_node(
+            "KZ2_NewSunOpacityVertexBlue",
+            "Squared vertex blue * 1.02857",
+            "MULTIPLY",
+            vertex_channels.outputs["Z"],
+            1.02857,
+            (600.0, -460.0),
+        )
+        opacity_threshold = math_node(
+            "KZ2_NewSunOpacityThreshold",
+            "Sampler0.R + vertex threshold",
+            "ADD",
+            sampler0_channels.outputs["Red"],
+            opacity_vertex_blue,
+            (780.0, -460.0),
+        )
+        inverse_opacity_mask = math_node(
+            "KZ2_NewSunInverseOpacityMask",
+            "1 - opacity mask",
+            "SUBTRACT",
+            1.0,
+            opacity_mask,
+            (960.0, -420.0),
+        )
+        threshold_term = math_node(
+            "KZ2_NewSunOpacityThresholdTerm",
+            "Threshold * inverse mask",
+            "MULTIPLY",
+            opacity_threshold,
+            inverse_opacity_mask,
+            (1140.0, -460.0),
+        )
+        mask_term = math_node(
+            "KZ2_NewSunOpacityMaskTerm",
+            "Opacity mask * 4.32",
+            "MULTIPLY",
+            opacity_mask,
+            4.32,
+            (1140.0, -360.0),
+        )
+        opacity_sum = math_node(
+            "KZ2_NewSunOpacitySum",
+            "Source opacity response",
+            "ADD",
+            threshold_term,
+            mask_term,
+            (1320.0, -420.0),
+        )
+        opacity = math_node(
+            "KZ2_NewSunSkyAlpha",
+            "1 - source opacity response",
+            "SUBTRACT",
+            1.0,
+            opacity_sum,
+            (1500.0, -420.0),
+            clamp=True,
+        )
+
+        material["kz2_preview_base_color"] = "eight-sampler sky composition"
+        material["kz2_preview_base_color_source"] = "shader_profile"
+        material["kz2_preview_opacity"] = "shader-computed"
+        material["kz2_preview_uv_map"] = "UV0"
+        material["kz2_preview_vertex_color"] = "RGB squared; alpha linear"
+        material["kz2_preview_base_color_combine"] = (
+            "decoded New Sun layered sky"
+        )
+        preview_node = texture_nodes["inSampler2"]
+        for node in nodes:
+            node.select = False
+        preview_node.select = True
+        nodes.active = preview_node
+        return final_color, opacity
+
+    @staticmethod
+    def _vertex_color_node(nodes):
+        existing = nodes.get("KZ2_VertexColor")
+        if existing is not None:
+            return existing
+        node = nodes.new("ShaderNodeVertexColor")
+        node.name = "KZ2_VertexColor"
+        node.label = f"KZ2 {KZ2_VERTEX_COLOR_ATTRIBUTE}"
+        node.layer_name = KZ2_VERTEX_COLOR_ATTRIBUTE
+        node.location = (-420.0, 860.0)
+        return node
 
     def _connect_profile_normal(
         self,
@@ -587,8 +1322,7 @@ class MaterialBuilder:
             return
         if texture.image.colorspace_settings.name != "Non-Color":
             self._warn_once(
-                f"Normal sampler {profile.normal_sampler} is not marked "
-                "Non-Color"
+                f"Normal sampler {profile.normal_sampler} is not marked Non-Color"
             )
             return
 
@@ -733,9 +1467,54 @@ class MaterialBuilder:
         specular_socket = principled.inputs.get("Specular IOR Level")
         if specular_socket is not None:
             node_tree.links.new(intensity, specular_socket)
-        material["kz2_roughness_approximation"] = (
-            "sqrt(2 / (specular_power + 2))"
+        material["kz2_roughness_approximation"] = "sqrt(2 / (specular_power + 2))"
+
+    def _connect_profile_vertex_emission(
+        self,
+        nodes,
+        node_tree,
+        principled,
+        profile: ShaderPreviewProfile,
+        material: bpy.types.Material,
+    ) -> None:
+        power = profile.vertex_color_emission_power
+        if power is None:
+            return
+        if power != 2.0:
+            self._warn_once(
+                f"Material profile {profile.profile_id} has unsupported "
+                "vertex-emission power"
+            )
+            return
+        emission_socket = principled.inputs.get("Emission Color")
+        if emission_socket is None:
+            emission_socket = principled.inputs.get("Emission")
+        if emission_socket is None:
+            self._warn_once(
+                f"Material profile {profile.profile_id} cannot connect "
+                "vertex emission to this Principled BSDF"
+            )
+            return
+
+        vertex_color = self._vertex_color_node(nodes)
+        squared = nodes.new("ShaderNodeVectorMath")
+        squared.name = "KZ2_VertexEmissionSquared"
+        squared.label = "Source vertex RGB squared emission"
+        squared.operation = "MULTIPLY"
+        squared.location = (80.0, -520.0)
+        node_tree.links.new(
+            vertex_color.outputs["Color"],
+            squared.inputs[0],
         )
+        node_tree.links.new(
+            vertex_color.outputs["Color"],
+            squared.inputs[1],
+        )
+        node_tree.links.new(squared.outputs["Vector"], emission_socket)
+        strength_socket = principled.inputs.get("Emission Strength")
+        if strength_socket is not None:
+            strength_socket.default_value = 1.0
+        material["kz2_preview_vertex_emission"] = "RGB squared"
 
     def _connect_diffuse_coordinates(
         self,
@@ -747,17 +1526,11 @@ class MaterialBuilder:
         uv_map: str,
         flip_v: bool,
     ) -> None:
-        texture_node = nodes.get(
-            f"KZ2_{binding_index:02d}_{sampler}"
-        )
+        texture_node = nodes.get(f"KZ2_{binding_index:02d}_{sampler}")
         if texture_node is None:
             return
         uv = nodes.new("ShaderNodeUVMap")
-        uv.name = (
-            "KZ2_DiffuseUV"
-            if uv_map == "DiffuseUV"
-            else "KZ2_BaseColorUV"
-        )
+        uv.name = "KZ2_DiffuseUV" if uv_map == "DiffuseUV" else "KZ2_BaseColorUV"
         uv.label = f"KZ2 base color {uv_map}"
         uv.uv_map = uv_map
         uv.location = (-1100.0 if flip_v else -880.0, texture_node.location.y)
@@ -803,9 +1576,7 @@ class MaterialBuilder:
         node_tree,
         binding_index: int,
     ):
-        texture_node = nodes.get(
-            f"KZ2_{binding_index:02d}_inSampler_LM"
-        )
+        texture_node = nodes.get(f"KZ2_{binding_index:02d}_inSampler_LM")
         if texture_node is None:
             return None
         decode = nodes.new("ShaderNodeGroup")
@@ -923,13 +1694,8 @@ class MaterialBuilder:
         if reference.local_index is not None:
             record = decoder.core.objects[reference.local_index]
             return ResolvedResource(decoder, record, decoder.decode(record))
-        if (
-            reference.external_id is not None
-            and self.external_resolver is not None
-        ):
-            self.external_resolver.add_requested_ids(
-                {reference.external_id}
-            )
+        if reference.external_id is not None and self.external_resolver is not None:
+            self.external_resolver.add_requested_ids({reference.external_id})
             return self.external_resolver.resolve(
                 reference.external_id,
                 expected_type=expected_type,
@@ -939,11 +1705,23 @@ class MaterialBuilder:
     def _image_for(
         self,
         resolved: ResolvedResource,
+        *,
+        force_non_color: bool = False,
     ) -> bpy.types.Image | None:
         texture = resolved.value
         assert isinstance(texture, Texture)
         record = resolved.record
-        key = (resolved.decoder.core.source, record.index)
+        is_float = texture.pixel_format == TextureFormat.RGBA_FLOAT_16
+        override_non_color = (
+            force_non_color
+            and texture.color_space == TextureColorSpace.SRGB
+            and not is_float
+        )
+        key = (
+            resolved.decoder.core.source,
+            record.index,
+            override_non_color,
+        )
         if key in self._images:
             return self._images[key]
         if texture.texture_type == TextureType.CUBEMAP:
@@ -956,14 +1734,13 @@ class MaterialBuilder:
         try:
             surface = decode_texture_surface(texture)
         except (Kz2AssetError, ValueError) as exc:
-            self._warn_once(
-                f"Texture {record.display_id} could not be decoded: {exc}"
-            )
+            self._warn_once(f"Texture {record.display_id} could not be decoded: {exc}")
             self._images[key] = None
             return None
 
         name = texture.prefix.name or f"KZ2_{record.display_id[:12]}"
-        is_float = texture.pixel_format == TextureFormat.RGBA_FLOAT_16
+        if override_non_color:
+            name = f"{name}_NonColor"
         image = bpy.data.images.new(
             name,
             width=surface.width,
@@ -973,7 +1750,11 @@ class MaterialBuilder:
         )
         image.colorspace_settings.name = (
             "sRGB"
-            if texture.color_space == TextureColorSpace.SRGB and not is_float
+            if (
+                texture.color_space == TextureColorSpace.SRGB
+                and not is_float
+                and not force_non_color
+            )
             else "Non-Color"
         )
         image.alpha_mode = "STRAIGHT"
@@ -987,6 +1768,8 @@ class MaterialBuilder:
         image["kz2_creation_flags"] = texture.creation_flags
         image["kz2_rsx_format"] = texture.descriptor.format
         image["kz2_rsx_remap"] = texture.descriptor.remap
+        if override_non_color:
+            image["kz2_color_space_override"] = "shader_profile"
         image.update()
         try:
             _pack_image(

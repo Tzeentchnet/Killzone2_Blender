@@ -31,6 +31,9 @@ explicitly distinguish validated behavior from guesses and unknown fields.
 | Local render-effect graphs and profile-driven preview materials | Supported |
 | Named sampler nodes, source color spaces, and 64x1 ramps | Supported |
 | Exact HGH/ISA tank normal, packed material, and track color previews | Supported |
+| Exact conventional vehicle normals, packed material, and layered color previews | Supported for ten audited retail vehicle roots |
+| HGH Fighter packed material, vertex prelighting, and staged destruction debris | Supported for the audited landing-bay fighter |
+| Exact character color, alpha, normal, and retained non-color roles | Supported for 109 shaders across 33 audited character roots |
 | Packed YUV lightmap reconstruction with separate sun occlusion | Supported |
 | Local object references | Supported |
 | PSARC catalog/extraction library | Supported in the pure-Python API |
@@ -39,6 +42,7 @@ explicitly distinguish validated behavior from guesses and unknown fields.
 | Static map placements and parent transforms | Supported |
 | Entity placeholder props and destructible model parts | Supported |
 | Derived entity resources, recursive child models, and animated helper attachments | Supported for the validated retail profile |
+| Model-proxy targets and controller parameter mappings | Supported as entity metadata |
 | Bundled retail entity catalog, persistent source selection, and sidebar import | Supported |
 | Campaign/MP map hierarchy and direct PSARC level import | Supported |
 | Complete-map and individual-section collections | Supported |
@@ -201,6 +205,31 @@ maps are identified and labeled but remain unconnected until their
 vehicle-specific composition is reproduced exactly; overheat ramps and
 emission layers are likewise preserved without a speculative preview.
 
+The same compiled-shader audit now covers representative HGH Dropship, ISA
+Intruder, HGH/ISA AAPC, ISA Buggy, ISA Exoskeleton, HGH ATAC, and HGH/ISA
+Cruiser materials. Exact profiles connect conventional tangent normals,
+proven secondary-color multiplication, and direct packed
+specular-power/intensity paths. Detail normals, IBL inputs, response ramps,
+and packed channels with mask or response arithmetic remain labeled
+Non-Color nodes rather than receiving a misleading generic connection.
+
+`HGH_Fighter [1945]` adds exact skinned and static component profiles. Both
+decode `inSampler1.G * 24.5` as specular power and blue as specular
+intensity; the intact fighter also adds source `KZ2Color.rgb²` through
+Principled emission. Its left wing, nose, and right wing are staged in a
+hidden destruction-debris collection at their decoded create-action
+transforms. The nested probability graph and MG turret model-proxy mappings
+are preserved as metadata. Runtime detachment, physics, timelines, and
+scripted flight paths are not executed.
+
+The character audit covers 109 exact shaders used by 33 representative HGH
+and ISA character resources. Conventional character normals, hair normals,
+base colors, and proven alpha-test inputs receive preview connections.
+Detail/wrinkle normals, skin masks and response ramps, packed material data,
+IBL inputs, and DXT5nm-style A/G or XY packed normals are labeled and forced
+to Non-Color where appropriate, but remain disconnected when their complete
+shader arithmetic or channel reconstruction has not been reproduced.
+
 ![Playback of an imported full-body EA02 animation in Blender](docs/images/Blender_KZ2_full_body_animation.gif)
 
 *Full-body EA02 animation played from an imported Blender Action.*
@@ -309,9 +338,11 @@ or omit the positional path after setting `KZ2_PSARC`.
   scripts, and AI/navigation records remain typed metadata for later
   adapters.
 - Entity/model render links and state-based destructibility model parts are
-  decoded. The full selected-section dependency graph and gameplay behavior
-  are not; ambiguous exact class/name resources therefore remain visible
-  diagnostic empties instead of selecting an arbitrary definition.
+  decoded. The audited HGH Fighter additionally stages its create/multi/
+  probability-action debris graph and records model-proxy mappings. The full
+  selected-section dependency graph and gameplay behavior are not;
+  ambiguous exact class/name resources therefore remain visible diagnostic
+  empties instead of selecting an arbitrary definition.
 - LOD and switch source order, keys, and distances are preserved. Blender
   initially hides non-primary variants because the exact runtime LOD
   comparison, equality behavior, distance origin, and distance unit remain
@@ -319,11 +350,15 @@ or omit the positional path after setting `KZ2_PSARC`.
 - Render-effect graphs are preserved, but compiled PS3 shaders are not
   generally translated into equivalent Blender shaders. Proven profiles
   select representative base color and opacity inputs; identified vehicle
-  profiles additionally connect normal, packed specular, and layered track
-  color inputs; and static packed lightmaps are reconstructed. Unprofiled
-  normal signs and packed channels, detail-normal composition,
-  response-ramp coordinates, emissive effects, and IBL paths remain
-  unconnected until their shader arithmetic is validated.
+  and character profiles additionally connect conventional normals and
+  selected layered-color or direct packed-specular paths; the audited New
+  Sun sky profiles reproduce their vertex-color, alpha, and eight-texture
+  layered composition; and static packed lightmaps are reconstructed.
+  Unprofiled normal signs and packed channels, packed A/G or XY normal
+  reconstruction, detail-normal composition, response-ramp coordinates,
+  unprofiled emissive effects, IBL paths, and mask-modulated packed
+  arithmetic remain unconnected until their exact shader behavior is
+  validated.
 - Cubemap faces and mips are parsed but are not yet converted from the
   game's Y-up face basis to Blender environment images.
 - Blend targets, collision shapes, render probes, and gameplay-specific

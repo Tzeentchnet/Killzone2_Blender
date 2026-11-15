@@ -7,10 +7,14 @@ from io_scene_killzone2.kz2_assets.core import CORE_SIGNATURE, CoreFile
 from io_scene_killzone2.kz2_assets.decoder import CoreDecoder
 from io_scene_killzone2.kz2_assets.model import (
     AttachmentMover,
+    CreateEntityAction,
     DestructibilityPartState,
     EntityResource,
     ModelPart,
+    ModelProxy,
     ModelResource,
+    MultiAction,
+    ProbabilityAction,
     StateBasedDestructibility,
 )
 from io_scene_killzone2.kz2_assets.psarc import PsarcEntry
@@ -220,6 +224,114 @@ def synthetic_attachment_mover_core() -> bytes:
     return bytes(data)
 
 
+def synthetic_gameplay_resource_core() -> bytes:
+    types = (
+        b"ModelProxyResource",
+        b"SkinnedModelResource",
+        b"CreateEntityAction",
+        b"EntityResource",
+        b"MultiAction",
+        b"ProbabilityAction",
+        b"String",
+    )
+    strings = (
+        b"TestProxy",
+        b"Aim Heading",
+        b"Turret Aim Heading",
+        b"Aim Pitch",
+        b"Turret Aim Pitch",
+        b"Create_TestDebris",
+        b"TestMulti",
+        b"TestProbability",
+    )
+
+    def resource_prefix(index: int) -> bytes:
+        return bytes((index, 1))
+
+    identity_with_translation = (
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        1.5,
+        -2.5,
+        3.5,
+        1.0,
+    )
+    payloads = (
+        (
+            resource_prefix(0)
+            + bytes(19)
+            + local_reference(1)
+            + struct.pack(">H", 2)
+            + bytes((1, 2, 3, 4))
+            + b"proxy-tail"
+        ),
+        b"unused-model",
+        (
+            resource_prefix(5)
+            + b"\x00\x01"
+            + local_reference(3)
+            + struct.pack(">16f", *identity_with_translation)
+            + b"create-tail"
+        ),
+        b"unused-entity",
+        (
+            resource_prefix(6)
+            + b"\x00\x01"
+            + compact(1)
+            + local_reference(2)
+            + b"multi-tail"
+        ),
+        (
+            resource_prefix(7)
+            + b"\x00\x01"
+            + local_reference(4)
+            + local_reference(2)
+            + struct.pack(">f", 0.25)
+            + b"probability-tail"
+        ),
+    )
+    object_type_indices = (0, 1, 2, 3, 4, 5)
+
+    data = bytearray(CORE_SIGNATURE)
+    data.append(1)
+    data.extend(bytes(16))
+    data.extend(compact(len(types)))
+    for type_name in types:
+        data.extend(compact(len(type_name)))
+        data.extend(type_name)
+    data.extend(compact(len(payloads)))
+    data.extend(object_type_indices)
+    for index, payload in enumerate(payloads):
+        data.extend(bytes((index + 1,)) + bytes(15))
+        data.extend(struct.pack(">I", len(payload)))
+        data.extend(bytes(12))
+    data.extend(compact(0))
+    data.extend(compact(1))
+    data.append(6)
+    data.extend(compact(len(strings)))
+    for value in strings:
+        data.extend(compact(1))
+        data.append(len(value))
+        data.extend(value)
+    data.extend(compact(0))
+    data.extend(compact(0))
+    for payload in payloads:
+        data.extend(compact(0))
+        data.extend(compact(0))
+        data.extend(payload)
+    return bytes(data)
+
+
 def definition(
     path: str,
     object_index: int,
@@ -237,6 +349,50 @@ def definition(
 
 
 class EntityTests(unittest.TestCase):
+    def test_model_proxy_and_gameplay_action_graph(self) -> None:
+        core = CoreFile.from_bytes(
+            synthetic_gameplay_resource_core(),
+            source="gameplay.core",
+        )
+        decoder = CoreDecoder(core)
+
+        proxy = decoder.decode(0)
+        self.assertIsInstance(proxy, ModelProxy)
+        self.assertEqual("TestProxy", proxy.prefix.name)
+        self.assertEqual(1, proxy.target_model.local_index)
+        self.assertEqual(
+            (
+                ("Aim Heading", "Turret Aim Heading"),
+                ("Aim Pitch", "Turret Aim Pitch"),
+            ),
+            proxy.parameter_mappings,
+        )
+        self.assertEqual(b"proxy-tail", proxy.trailing)
+
+        create = decoder.decode(2)
+        self.assertIsInstance(create, CreateEntityAction)
+        self.assertEqual(3, create.entity.local_index)
+        self.assertEqual(
+            (1.5, -2.5, 3.5, 1.0),
+            create.local_matrix[3],
+        )
+        self.assertEqual(b"create-tail", create.trailing)
+
+        multi = decoder.decode(4)
+        self.assertIsInstance(multi, MultiAction)
+        self.assertEqual(
+            (2,),
+            tuple(reference.local_index for reference in multi.actions),
+        )
+        self.assertEqual(b"multi-tail", multi.trailing)
+
+        probability = decoder.decode(5)
+        self.assertIsInstance(probability, ProbabilityAction)
+        self.assertEqual(4, probability.primary_action.local_index)
+        self.assertEqual(2, probability.secondary_action.local_index)
+        self.assertAlmostEqual(0.25, probability.primary_probability)
+        self.assertEqual(b"probability-tail", probability.trailing)
+
     def test_entity_model_and_destructibility_graph(self) -> None:
         core = CoreFile.from_bytes(
             synthetic_entity_core(child_indices=(1,)),

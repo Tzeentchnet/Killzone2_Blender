@@ -20,7 +20,9 @@ that are merely framed from interpretations that affect Blender output.
 | External named resources | Prefer same-level definitions, then shared base lumps, then a globally unique definition | Import policy; no serialized priority field is known |
 | Four-component `UV0` | `.xy` is treated as lightmap UV and `.zw` as pre-flipped diffuse UV | Retail-validated for traced optimized level shaders; may be shader/profile dependent |
 | Unknown material profile | An sRGB `inSampler0` may become preview base color | Deliberate guess, labeled `srgb_heuristic` in Blender |
+| Exact-profile data color space | Proven normal, detail-normal, packed-material, mask, response, IBL, and packed-normal samplers use a separate Non-Color image view when their generic texture metadata says sRGB | Exact compiled-shader role overrides generic resource metadata; the original sRGB view remains available for color use |
 | State-based destructibility | Three byte layouts are tried and ranked using allocation-derived part counts and valid part-state references | Deliberate heuristic; raw bytes are retained when no candidate is credible |
+| Staged entity creation | Acyclic local probability/multi trees with create-entity leaves become hidden inspectable debris collections | Retail-validated for `HGH_Fighter`; this is not gameplay execution |
 | LOD display | Source order/distances are preserved, but non-primary variants begin hidden | Safe preview policy because runtime comparison and units are unknown |
 | Animation binding | Bone-map names/order and direct Edge joint order must match armature metadata | Validated compatibility rule; full bone-map semantics are incomplete |
 | Clip application | `EA02` transforms are applied as absolute local transforms | Working interpretation; additive/composite semantics are unproven |
@@ -42,6 +44,9 @@ that are merely framed from interpretations that affect Blender output.
 - The five values in each allocation record and the roles of the four
   allocation-list locations.
 - The scalar between string banks and the second global allocation list.
+- Negative object-local allocation-list count encodings encountered late in
+  the shared character and default multiplayer COREs. Their framing is not
+  guessed; external resolution through those files currently fails closed.
 - The byte after a resource name in `ResourcePrefix`.
 - Top-level trailing bytes.
 
@@ -70,9 +75,15 @@ that are merely framed from interpretations that affect Blender output.
 - Compiled `SHO` instruction semantics outside targeted shader research.
 - Normal signs and packed material channels outside the exact shader
   profiles, plus response-ramp coordinates, emissive effects, IBL, and
-  detail-normal composition. The HGH/ISA tank detail samplers and their
-  per-sample scaling are identified, but their complete Blender-equivalent
-  combination is not yet mapped.
+  detail-normal composition. Exact profiles now cover conventional paths in
+  the audited HGH dropship, ISA Intruder, HGH/ISA AAPC, ISA buggy, ISA
+  exoskeleton, HGH ATAC, HGH fighter, HGH/ISA cruiser, and HGH/ISA tank
+  materials. The fighter's exact skinned profile also reproduces its squared
+  vertex-RGB prelighting.
+  They also cover all 109 shader identities in the representative
+  33-character audit. Response- or mask-modulated packed paths, skin
+  response data, and A/G or XY packed-normal reconstruction remain labeled
+  but unconnected.
 
 ### Levels and entities
 
@@ -83,7 +94,12 @@ that are merely framed from interpretations that affect Blender output.
 - The 90/91/103-byte destructibility headers, 86/87-byte per-part prefixes,
   two-byte suffixes, and the inferred 144-byte allocation unit.
 - `AlignToWorld` behavior for attachment movers.
+- The retained two-byte action headers, the 19-byte model-proxy header, and
+  runtime semantics beyond the decoded references, matrices, mappings, and
+  probability weight.
 - Complete gameplay dependency and destructibility state behavior.
+- Scripted paths, mover timelines, debris detachment, impulses, and physics
+  execution.
 
 ### Skeletons and animation
 

@@ -3,6 +3,122 @@
 This file records user-visible extension changes and significant validation
 results.
 
+## 0.5.14 - 2026-11-14
+
+### Added
+
+- Two exact HGH Fighter profiles connect the intact skinned model and its
+  static destruction components to their proven diffuse and packed material
+  inputs. Both use `inSampler1.G * 24.5` for specular power and blue for
+  specular intensity.
+- The intact fighter profile adds squared source vertex RGB as localized
+  prelighting through Principled emission.
+- `CreateEntityAction`, `MultiAction`, and `ProbabilityAction` now expose
+  typed entity references, transforms, action branches, and probability
+  weights. Cached and level entity imports stage the fighter's left wing,
+  nose, and right wing in a hidden destruction-debris collection.
+- `ModelProxyResource` now exposes its target model and controller parameter
+  mappings. The fighter MG turret records its heading and pitch mappings as
+  Blender metadata instead of reporting a missing render model.
+- Four exact Corinth River/The New Sun sky profiles reproduce the audited
+  billboard, vertex-alpha, vertex-masked, and eight-texture layered-sky
+  programs. Their proven color and opacity expressions now drive Blender
+  previews instead of the generic first-sampler fallback.
+- Source vertex-color streams are imported as the `KZ2Color` corner
+  attribute for shader profiles that use vertex RGB or alpha.
+- One hundred five new exact character shader profiles, combined with the
+  four existing HGH profiles, cover all 109 shader identities found across
+  33 representative HGH and ISA character resources.
+- Exact profiles now identify and connect conventional character base color,
+  tangent normals, hair opacity/normal inputs, alpha-test opacity roles, and
+  the one proven secondary-color multiplication path.
+- Profile-specific retained sampler roles label skin masks, response ramps,
+  detail/wrinkle normals, material modulation, IBL data, and packed A/G or XY
+  normals without assigning speculative Principled connections.
+- Proven character data samplers receive Non-Color image views even when
+  generic source texture metadata marks them sRGB.
+
+### Changed
+
+- New Sun profile materials use Blender's blended surface mode. The layered
+  sky profile samples all eight shader inputs, including both distinct
+  coordinates for `inSampler1`, and reproduces its mask-controlled color and
+  opacity composition.
+- The two audited hair profiles now require complete shader hashes, object
+  IDs, ordered sampler/variable signatures, and technique zero. The former
+  broad hair matches were removed.
+- The shader previously labeled as color-only hair is now correctly treated
+  as an alpha-tested color program because its fragment program contains a
+  kill path.
+
+### Research
+
+- The fighter's terminal damage transition resolves to a 50% all-component
+  branch, a 25% nose-plus-left-wing branch, and a 25% left-plus-right-wing
+  branch. Create-action matrices place the components at their matching
+  intact-model regions.
+- The fighter's path mover, timelines, scripted placement, dynamic
+  detachment, and physics behavior remain deliberately deferred; the import
+  represents only the static inspectable setup.
+- Disassembly of the five reported New Sun meshes established their exact
+  texture-alpha, vertex-alpha, squared vertex-color, inverse-alpha, and
+  layered-sky paths. The layered graph reproduces the decoded default UV
+  state; animation of its ten runtime placement offsets remains outside the
+  static Blender import.
+- Disassembled and classified 109 distinct fragment programs used by 193
+  materials. The principal families are 50 standard deferred, 12 skin, nine
+  layered cloth/armor, five compact-normal, 11 alpha-tested, four
+  compact-material, four packed-normal, three color-only, and two hair
+  shaders, plus specialized one-off families.
+- Several character normals use A/G or XY packing rather than conventional
+  RGB. They remain labeled Non-Color nodes until their channel reconstruction
+  is represented explicitly.
+- Shared character and multiplayer COREs expose an unresolved negative
+  object-local allocation-list encoding. Production parsing remains
+  fail-closed; no tolerant audit fallback was added.
+
+## 0.5.13 - 2026-11-14
+
+### Added
+
+- Thirty-three additional exact vehicle shader profiles cover conventional
+  materials from the HGH Dropship, HGH/ISA AAPC, ISA Buggy, ISA
+  Exoskeleton, HGH ATAC, and HGH/ISA Cruiser. Together with existing exact
+  profiles, 42 of the 58 shader identities in the representative
+  nine-vehicle audit now have proven preview semantics.
+- Proven vehicle tangent normals, direct packed specular-power/intensity
+  paths, and full-RGB secondary base-color multiplication now connect to
+  Blender. Detail normals, IBL inputs, and complex packed masks remain
+  labeled and unconnected.
+- Exact normal, detail-normal, and packed-material roles now receive
+  Non-Color image views even when generic source texture metadata says sRGB.
+  A separate sRGB view remains available if the same texture is also used as
+  color data.
+
+### Changed
+
+- The three ISA Intruder profiles now reproduce their secondary albedo
+  multiplication, connect their proven `inSampler3` normals and `R * 49`
+  packed data, and identify both detail-normal variants.
+- Existing ISA Cruiser layered profiles now connect their proven
+  `inSampler5` normals and label `inSampler6` detail normals,
+  `inSampler3` packed/layer masks, and `inSampler4` IBL lookups. Their
+  mask-modulated packed arithmetic remains intentionally disconnected.
+- The original HGH Dropship profile now requires its complete compiled
+  shader hash in addition to shader ID and ordered signatures.
+
+### Research
+
+- All 58 representative vehicle fragment programs were extracted using each
+  fragment section's declared code span, independently disassembled, and
+  correlated with runtime sampler/variable signatures and 114 decoded
+  texture samples.
+- Direct vehicle packed-power factors are proven as `98`, `49`, `12.25`, or
+  `6.125`, depending on the exact program; blue carries specular intensity.
+  Programs that first combine packed channels with masks, response lookups,
+  base color, or angular terms remain semantic metadata rather than
+  approximate Principled roughness graphs.
+
 ## 0.5.12 - 2026-11-14
 
 ### Added

@@ -379,16 +379,40 @@ Technique zero supplies Blender preview nodes. Exact profiles are selected by
 combinations of shader-object ID, full shader hash, ordered sampler signature,
 variable signature, and technique index.
 
-Profiles marked `proven` in the implementation cover representative M82, Sev,
-hair, Reflection Room, HGH dropship, HGH character, ISA cruiser, and HGH/ISA
-tank variants. "Proven" means the sampler role was established for that exact
-identity, not that the entire PS3 deferred shader has an equivalent Blender
-graph.
+Profiles marked `proven` in the implementation cover representative M82,
+Sev, Reflection Room, HGH/ISA tanks, the ten audited vehicle roots, and all
+109 shader identities found across 33 representative character roots.
+"Proven" means the sampler role was established for that exact identity, not
+that the entire PS3 deferred shader has an equivalent Blender graph.
 
 If no exact profile matches, an sRGB `inSampler0` texture is connected as an
 explicit `srgb_heuristic` base color. That fallback is a **guess**, not a
 format rule. Other numbered samplers remain available as named nodes rather
 than being assigned speculative roles.
+
+### Corinth River/The New Sun sky preview
+
+Four exact profiles reproduce the compiled programs used by the five audited
+New Sun sky meshes:
+
+| Meshes | Preview color | Preview opacity |
+|---|---|---|
+| `StaticMeshResource_12_P00` | Texture RGB | Texture alpha |
+| `StaticMeshResource_17_P00`, `StaticMeshResource_25_P00` | Texture RGB | Texture alpha multiplied by vertex alpha |
+| `StaticMeshResource_47_P00` | Texture RGB multiplied by squared vertex RGB | `clamp(1 - vertexAlpha / textureAlpha)` |
+| `StaticMeshResource_37_P01` | Eight-sampler layered composition | Shader-computed threshold mask |
+
+The required normalized vertex RGBA stream is imported as a `FLOAT_COLOR`,
+corner-domain attribute named `KZ2Color`. Meshes without that stream are not
+assigned synthetic color data.
+
+The eight-sampler profile no longer treats `inSampler0` as albedo. It
+reproduces the decoded primary and secondary layers, two differently
+positioned samples of `inSampler1`, vertex-color modulation, and the final
+threshold opacity. Its source vertex program exposes ten animated
+`place2dTexture` offsets. Blender reproduces their decoded zero-offset
+defaults for a deterministic static preview; runtime animation of those
+offsets is not imported.
 
 ### Tangent-space normal preview
 
@@ -426,6 +450,26 @@ sample by `2` before its profile-specific combination. Blender retains these
 textures as labeled non-color nodes but does not connect them through an
 inexact generic normal blend.
 
+The audited Intruder, AAPC, buggy, exoskeleton, ATAC, and cruiser programs use
+the same positive tangent-basis convention. Their exact profiles therefore
+also set `normal_y_flip=False`; Blender applies only the imported-UV basis
+compensation described above.
+
+The audited standard, compact-normal, layered, skin, hair, specialized, and
+Visari character programs likewise identify conventional RGB tangent-space
+normals. Their primary normals use the same imported-V compensation.
+Character detail/wrinkle samplers are retained as labeled Non-Color nodes
+because the source programs blend them with masks or response terms that the
+Principled preview does not yet reproduce.
+
+An exact shader profile is stronger evidence of data interpretation than the
+texture resource's generic color flag. If a proven normal, detail-normal, or
+packed-material sampler is marked sRGB in the source, or an exact character
+profile identifies a mask, response ramp, IBL input, or packed normal, the
+importer creates a separate Non-Color Blender image view for that role and
+records `kz2_color_space_override = shader_profile` on it. A color use of the
+same source texture can retain its original sRGB image independently.
+
 Profiles whose shader-space Y sign remains unknown keep their normal sampler
 as labeled metadata and do not connect it to the surface normal.
 
@@ -437,6 +481,7 @@ following channel operations are proven from their RSX instructions:
 | Shader object ID | Specular power | Specular intensity |
 |---|---|---|
 | `c54604143359f6cb1e7766c8fa2a3b38` | `G * 98` | B |
+| `8b87b9478d05f0dce11dc5c7be09a657`, `0baf0706e8b84648060ad143b16824ac` | `G * 24.5` | B |
 | `2ee5e3ff3a42dd5cd1f33374891901f0` | `G * 24.5` | B |
 | `3d23b1bce366078a44c0bfe6ac133f61` | `R * 14.7024` | B |
 | `1de0cb0694403a758185efc552229c6d` | `R * 49` | B |
@@ -450,6 +495,20 @@ following channel operations are proven from their RSX instructions:
 | `2283f987591d17d65f60db32222736bb` | `R * 39.1904` | B |
 | `d8de6701c66b7caece3b70e3555b198b` | `R * 49` | B |
 
+Additional audited vehicle families prove these direct operations:
+
+| Vehicle family | Exact direct operation | Specular intensity |
+|---|---|---|
+| HGH dropship | `G * 98`, with one `G * 49` variant | B |
+| HGH fighter | `G * 24.5` | B |
+| ISA Intruder | `R * 49` | B |
+| HGH AAPC | `R * 49` plus the shared tank-template variants above | B |
+| ISA AAPC | `R * 49` and one `G * 49` ramp variant | B |
+| ISA buggy | `R * 49` | B |
+| ISA exoskeleton | `G * 49` | B |
+| HGH ATAC | `R * 6.125` | B |
+| HGH cruiser | one direct `G * 12.25` variant | B |
+
 Blender receives the intensity channel through **Specular IOR Level**. The
 game's Blinn-Phong-style power is approximated as Principled roughness:
 
@@ -461,6 +520,80 @@ The relevant HGH dropship, character, and layered tank profiles also identify
 a shared response/IBL lookup (`inSampler2`, or `inSampler3` for HGH tracks).
 That lighting lookup is preserved only as labeled metadata; the Principled
 preview does not attempt to reproduce the deferred IBL pass.
+
+### Audited vehicle shader coverage
+
+The representative retail audit plus the focused HGH Fighter audit decoded
+60 exact fragment-shader identities across ten vehicle roots. Forty-four
+match exact preview profiles, including shared tank-template profiles used by
+the AAPCs. The counts below describe those audited roots, not a claim that
+every level-specific vehicle variant is covered.
+
+| Vehicle | Exact profiles / audited shaders | Connected preview data | Deliberately retained without approximation |
+|---|---:|---|---|
+| HGH dropship | 5 / 6 | Four normals; four direct packed-power/intensity paths | Five IBL inputs; nonlinear material arithmetic on one profile; auxiliary ramp shader unmatched |
+| HGH fighter | 2 / 2 | Two `G * 24.5` packed paths; squared vertex-RGB emission on the intact model | Nonlinear packed red response |
+| ISA Intruder | 3 / 3 | Three normals, three `base * secondary` layers, three `R * 49` packed paths | Two detail normals |
+| HGH AAPC | 6 / 11 | Three normals, three secondary color layers, four direct packed paths | Two detail normals; response-modulated and specialized parallax variants |
+| ISA AAPC | 9 / 13 | Seven normals and six direct packed paths | Four detail normals; three mask/response-modulated material paths |
+| ISA buggy | 7 / 13 | Four normals, two secondary color layers, seven `R * 49` packed paths | Two detail normals; six specialized mask/response variants unmatched |
+| ISA exoskeleton | 3 / 4 | Two normals, two secondary color layers, two `G * 49` packed paths | Two detail normals; one response-modulated material path |
+| HGH ATAC | 1 / 1 | One normal and one `R * 6.125` packed path | None in the audited material |
+| HGH cruiser | 4 / 5 | Four normals; one `G * 12.25` packed path | Three mask/material paths, two IBL inputs, and one specialized shader unmatched |
+| ISA cruiser | 4 / 4 | Three layered normals; all four verified albedos | Three detail normals, packed mask arithmetic, and three IBL inputs |
+
+For the "retained" cases, the sampler node receives a semantic label and the
+correct Non-Color interpretation when it is data, but remains disconnected
+from Principled roughness, normal, or emission. In particular, a familiar
+constant such as `49` or `98` is not enough to justify a direct graph when the
+shader first multiplies the packed channel by a mask, response lookup, base
+color, or angular term.
+
+The intact fighter's skinned profile also reproduces its localized source
+prelighting:
+
+```text
+emission = KZ2Color.rgb * KZ2Color.rgb
+```
+
+Only five retail fighter vertices carry a nonzero contribution. The static
+wing and nose profile shares the diffuse and packed-material fragment path
+but does not add vertex emission.
+
+### Audited character shader coverage
+
+The representative character audit covered 193 materials from 33 distinct
+`SoldierResource` roots. Their 187 profile lookups reduce to 109 exact shader
+identities. Every identity is guarded by the complete compiled-shader hash,
+shader object ID, ordered sampler signature, ordered variable signature, and
+technique index.
+
+| Shader family | Exact identities | Connected preview data | Deliberately retained without approximation |
+|---|---:|---|---|
+| Standard deferred | 50 | Base color and tangent normal; four previously proven direct packed-specular paths | Other packed material and IBL inputs |
+| Skin deferred | 12 | Base color and primary tangent normal | Detail/wrinkle normal, four mask/response inputs, and response ramp |
+| Layered cloth/armor | 9 | Base color and primary tangent normal | Detail normal, blend mask, packed material, and IBL |
+| Compact normal | 5 | Base color and tangent normal | Packed material |
+| Alpha-tested color | 11 | Base color and proven opacity role | Remaining alpha-test threshold/render-state behavior |
+| Compact material | 4 | Base color | Packed material and IBL |
+| Packed-normal deferred | 4 | Base color | Three A/G normals, one XY normal, packed material, and IBL |
+| Color-only | 3 | Base color | None |
+| Hair deferred | 2 | Base color, opacity role, and tangent normal | Complete hair-lighting response |
+| Specialized deferred | 2 | Base color and tangent normal | Packed material and IBL |
+| One-off families | 7 | Proven base colors and one secondary-color multiply where applicable | Eye/color modulation, response data, IBL, and constant-output behavior |
+
+The A/G and XY packed-normal families are not routed through Blender's RGB
+Normal Map node. Their shader programs reconstruct missing components from
+specific channels; until that reconstruction is represented explicitly,
+connecting the stored RGB values would be visibly wrong. The source nodes
+therefore remain labeled, unconnected, and Non-Color.
+
+Some ISA character roots resolve textures through shared CORE files whose
+later object-local allocation-list encoding is not yet framed. The production
+parser still fails closed on those files; no audit-only tolerant fallback is
+shipped. Exact profile matching was validated against the captured retail
+shader lookups, while end-to-end Blender validation remains limited to
+character roots whose dependencies parse normally.
 
 ### Tank track color layers
 
@@ -502,6 +635,8 @@ not a claim of complete equivalence with the original deferred renderer.
   Exact profiles cover only identified shaders; the generic base-color path
   is deliberately labeled as a heuristic.
 - Normal-map signs and packed material channels remain unknown outside the
-  exact profiles above. Detail-normal composition, ramps, emissive behavior,
-  IBL, and other secondary blend arithmetic remain profile-specific research
-  topics.
+  exact profiles above. The audited complex vehicle and character variants
+  intentionally retain their masks without converting them to roughness.
+  Character A/G and XY packed-normal reconstruction, detail-normal
+  composition, ramps, emissive behavior, IBL, and other secondary blend
+  arithmetic remain profile-specific research topics.

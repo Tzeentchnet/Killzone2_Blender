@@ -200,6 +200,130 @@ class BlenderLevelImportTests(unittest.TestCase):
                     uv_map,
                     uv_node.uv_map,
                 )
+                if profile_id == "isa_cruiser_layered_deferred":
+                    self.assertEqual(
+                        "inSampler5",
+                        material["kz2_profile_normal_sampler"],
+                    )
+                    self.assertEqual(
+                        "inSampler6",
+                        material["kz2_profile_detail_normal_sampler"],
+                    )
+                    self.assertEqual(
+                        "inSampler3",
+                        material["kz2_profile_material_sampler"],
+                    )
+                    self.assertEqual(
+                        "inSampler4",
+                        material["kz2_profile_reflection_sampler"],
+                    )
+                    self.assertEqual(
+                        "KZ2_NormalMap",
+                        principled.inputs["Normal"]
+                        .links[0]
+                        .from_node.name,
+                    )
+                    self.assertFalse(
+                        principled.inputs["Roughness"].is_linked
+                    )
+                    self.assertFalse(
+                        principled.inputs[
+                            "Specular IOR Level"
+                        ].is_linked
+                    )
+                    detail_node = next(
+                        node
+                        for node in material.node_tree.nodes
+                        if node.get("kz2_sampler") == "inSampler6"
+                    )
+                    self.assertFalse(
+                        any(
+                            output.is_linked
+                            for output in detail_node.outputs
+                        )
+                    )
+
+        sky_materials = {
+            "StaticMeshResource_12_P00": (
+                "new_sun_billboard_alpha",
+                "KZ2_00_inSampler0",
+                "KZ2_00_inSampler0",
+                False,
+            ),
+            "StaticMeshResource_17_P00": (
+                "new_sun_vertex_alpha",
+                "KZ2_00_inSampler0",
+                "KZ2_NewSunVertexAlpha",
+                True,
+            ),
+            "StaticMeshResource_25_P00": (
+                "new_sun_vertex_alpha",
+                "KZ2_00_inSampler0",
+                "KZ2_NewSunVertexAlpha",
+                True,
+            ),
+            "StaticMeshResource_37_P01": (
+                "new_sun_layered_sky",
+                "KZ2_NewSunSkyFinalColor",
+                "KZ2_NewSunSkyAlpha",
+                True,
+            ),
+            "StaticMeshResource_47_P00": (
+                "new_sun_vertex_masked",
+                "KZ2_NewSunVertexColorModulate",
+                "KZ2_NewSunInverseAlpha",
+                True,
+            ),
+        }
+        for mesh_name, (
+            profile_id,
+            color_node,
+            alpha_node,
+            has_vertex_color,
+        ) in sky_materials.items():
+            with self.subTest(mesh=mesh_name):
+                mesh = bpy.data.meshes.get(mesh_name)
+                self.assertIsNotNone(mesh)
+                self.assertEqual(
+                    has_vertex_color,
+                    mesh.color_attributes.get("KZ2Color") is not None,
+                )
+                self.assertEqual(1, len(mesh.materials))
+                material = mesh.materials[0]
+                self.assertEqual(profile_id, material["kz2_profile_id"])
+                self.assertEqual("proven", material["kz2_profile_status"])
+                self.assertEqual("BLENDED", material.surface_render_method)
+                principled = next(
+                    node
+                    for node in material.node_tree.nodes
+                    if node.bl_idname == "ShaderNodeBsdfPrincipled"
+                )
+                self.assertEqual(
+                    color_node,
+                    principled.inputs["Base Color"]
+                    .links[0]
+                    .from_node.name,
+                )
+                self.assertEqual(
+                    alpha_node,
+                    principled.inputs["Alpha"].links[0].from_node.name,
+                )
+
+        layered = bpy.data.meshes[
+            "StaticMeshResource_37_P01"
+        ].materials[0]
+        self.assertEqual(
+            {f"inSampler{index}" for index in range(8)},
+            {
+                node.get("kz2_sampler")
+                for node in layered.node_tree.nodes
+                if node.get("kz2_sampler") is not None
+            },
+        )
+        self.assertEqual(
+            "KZ2Color",
+            layered.node_tree.nodes["KZ2_VertexColor"].layer_name,
+        )
 
     def test_imports_multiplayer_map_placements_from_psarc(self) -> None:
         from io_scene_killzone2.import_scene import (

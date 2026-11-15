@@ -10,11 +10,15 @@ from .errors import Kz2AssetError
 from .geometry import read_resource_prefix
 from .model import (
     AttachmentMover,
+    CreateEntityAction,
     DestructibilityPartState,
     EntityResource,
     Matrix4,
     ModelPart,
+    ModelProxy,
     ModelResource,
+    MultiAction,
+    ProbabilityAction,
     StateBasedDestructibility,
 )
 
@@ -32,6 +36,9 @@ DESTRUCTIBILITY_PART_ALLOCATION_SIZE = 144
 DESTRUCTIBILITY_PART_SUFFIX_SIZE = 2
 HUMANOID_BODY_VARIANT_SIZE = 28
 MAX_HUMANOID_BODY_VARIANTS = 64
+ACTION_HEADER_SIZE = 2
+MODEL_PROXY_HEADER_SIZE = 19
+MAX_MODEL_PROXY_MAPPINGS = 256
 HUMANOID_ENTITY_TYPES: Final = frozenset(
     {
         "HumanoidResource",
@@ -243,6 +250,110 @@ def parse_model_resource(
     prefix = read_resource_prefix(decoder, reader)
     mesh = decoder.core.read_reference(reader)
     return ModelResource(prefix, mesh, reader.read(reader.remaining))
+
+
+def parse_model_proxy(
+    decoder: CoreDecoder,
+    obj: CoreObject,
+    reader: BinaryReader,
+) -> ModelProxy:
+    prefix = read_resource_prefix(decoder, reader)
+    header = reader.read(MODEL_PROXY_HEADER_SIZE)
+    target_model = decoder.core.read_reference(reader)
+    mapping_count = reader.u16()
+    if mapping_count > MAX_MODEL_PROXY_MAPPINGS:
+        reader.fail(
+            "invalid model-proxy parameter mapping count",
+            expected=f"at most {MAX_MODEL_PROXY_MAPPINGS}",
+            observed=mapping_count,
+        )
+    parameter_mappings = tuple(
+        (
+            decoder.core.read_string_index(reader, "String"),
+            decoder.core.read_string_index(reader, "String"),
+        )
+        for _ in range(mapping_count)
+    )
+    return ModelProxy(
+        prefix=prefix,
+        header=header,
+        target_model=target_model,
+        parameter_mappings=parameter_mappings,
+        trailing=reader.read(reader.remaining),
+    )
+
+
+def parse_create_entity_action(
+    decoder: CoreDecoder,
+    obj: CoreObject,
+    reader: BinaryReader,
+) -> CreateEntityAction:
+    prefix = read_resource_prefix(decoder, reader)
+    header = reader.read(ACTION_HEADER_SIZE)
+    entity = decoder.core.read_reference(reader)
+    local_matrix = _read_matrix4(reader)
+    if not all(
+        math.isfinite(value)
+        for row in local_matrix
+        for value in row
+    ):
+        reader.fail("non-finite create-entity action matrix")
+    return CreateEntityAction(
+        prefix=prefix,
+        header=header,
+        entity=entity,
+        local_matrix=local_matrix,
+        trailing=reader.read(reader.remaining),
+    )
+
+
+def parse_multi_action(
+    decoder: CoreDecoder,
+    obj: CoreObject,
+    reader: BinaryReader,
+) -> MultiAction:
+    prefix = read_resource_prefix(decoder, reader)
+    header = reader.read(ACTION_HEADER_SIZE)
+    action_count = reader.count("multi-action count")
+    actions = tuple(
+        decoder.core.read_reference(reader)
+        for _ in range(action_count)
+    )
+    return MultiAction(
+        prefix=prefix,
+        header=header,
+        actions=actions,
+        trailing=reader.read(reader.remaining),
+    )
+
+
+def parse_probability_action(
+    decoder: CoreDecoder,
+    obj: CoreObject,
+    reader: BinaryReader,
+) -> ProbabilityAction:
+    prefix = read_resource_prefix(decoder, reader)
+    header = reader.read(ACTION_HEADER_SIZE)
+    primary_action = decoder.core.read_reference(reader)
+    secondary_action = decoder.core.read_reference(reader)
+    primary_probability = reader.f32()
+    if (
+        not math.isfinite(primary_probability)
+        or not 0.0 <= primary_probability <= 1.0
+    ):
+        reader.fail(
+            "invalid probability-action weight",
+            expected="0..1",
+            observed=primary_probability,
+        )
+    return ProbabilityAction(
+        prefix=prefix,
+        header=header,
+        primary_action=primary_action,
+        secondary_action=secondary_action,
+        primary_probability=primary_probability,
+        trailing=reader.read(reader.remaining),
+    )
 
 
 def parse_model_part(

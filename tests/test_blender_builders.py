@@ -22,12 +22,19 @@ except ModuleNotFoundError:
 def _mesh_inputs(import_scene, vertex_semantic):
     positions = [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (1.0, 1.0, 0.0)]
     normals = [(0.0, 0.0, 1.0)] * 4
+    colors = [
+        (0.1, 0.2, 0.3, 0.4),
+        (0.5, 0.6, 0.7, 0.8),
+        (0.9, 1.0, 0.1, 0.2),
+        (0.3, 0.4, 0.5, 0.6),
+    ]
     # Packed level UV0: lightmap XY plus a pre-flipped diffuse pair in ZW.
     uv0 = [(0.1, 0.2, 0.3, 0.4), (0.5, 0.6, 0.7, 0.8), (0.9, 0.1, 0.2, 0.3), (0.4, 0.5, 0.6, 0.7)]
     uv1 = [(0.25, 0.75), (0.5, 0.5), (0.75, 0.25), (1.0, 0.0)]
     streams = {
         vertex_semantic.POSITION: positions,
         vertex_semantic.NORMAL: normals,
+        vertex_semantic.COLOR: colors,
         vertex_semantic.UV0: uv0,
         vertex_semantic.UV1: uv1,
     }
@@ -72,8 +79,16 @@ class BlenderBuilderTests(unittest.TestCase):
             [layer.name for layer in mesh.uv_layers],
         )
         self.assertEqual("DiffuseUV", mesh.uv_layers.active.name)
+        color_attribute = mesh.color_attributes["KZ2Color"]
+        self.assertEqual("CORNER", color_attribute.domain)
+        self.assertEqual("FLOAT_COLOR", color_attribute.data_type)
         for loop in mesh.loops:
             vertex = loop.vertex_index
+            for observed, expected in zip(
+                color_attribute.data[loop.index].color,
+                streams[VertexSemantic.COLOR][vertex],
+            ):
+                self.assertAlmostEqual(expected, observed, places=6)
             lightmap, diffuse = blender_uv_pairs(streams[VertexSemantic.UV0][vertex], flip_v=True)
             secondary, _ = blender_uv_pairs(streams[VertexSemantic.UV1][vertex], flip_v=True)
             for name, expected in (("UV0", lightmap), ("DiffuseUV", diffuse), ("UV1", secondary)):

@@ -106,6 +106,42 @@ class ModelResource:
 
 
 @dataclass(frozen=True, slots=True)
+class ModelProxy:
+    prefix: ResourcePrefix
+    header: bytes
+    target_model: CoreReference
+    parameter_mappings: tuple[tuple[str, str], ...]
+    trailing: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class CreateEntityAction:
+    prefix: ResourcePrefix
+    header: bytes
+    entity: CoreReference
+    local_matrix: Matrix4
+    trailing: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class MultiAction:
+    prefix: ResourcePrefix
+    header: bytes
+    actions: tuple[CoreReference, ...]
+    trailing: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class ProbabilityAction:
+    prefix: ResourcePrefix
+    header: bytes
+    primary_action: CoreReference
+    secondary_action: CoreReference
+    primary_probability: float
+    trailing: bytes
+
+
+@dataclass(frozen=True, slots=True)
 class ModelPart:
     prefix: ResourcePrefix
     mesh: CoreReference

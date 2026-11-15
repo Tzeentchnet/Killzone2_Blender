@@ -11,7 +11,7 @@ from pathlib import Path
 import bpy
 from mathutils import Matrix, Quaternion, Vector
 
-from .import_materials import MaterialBuilder
+from .import_materials import KZ2_VERTEX_COLOR_ATTRIBUTE, MaterialBuilder
 from .kz2_assets.animation_graph import animation_state_clip_names
 from .kz2_assets.core import CoreFile, CoreObject, CoreReference
 from .kz2_assets.decoder import CoreDecoder
@@ -24,6 +24,7 @@ from .kz2_assets.errors import FormatError
 from .kz2_assets.geometry import (
     blender_uv_pairs,
     decode_semantic,
+    read_resource_prefix,
     reconstruct_skin_position,
     reconstruct_static_position,
 )
@@ -32,15 +33,19 @@ from .kz2_assets.level_catalog import CachedLevel
 from .kz2_assets.model import (
     AttachmentMover,
     BoneBindings,
+    CreateEntityAction,
     DestructibilityPartState,
     EntityResource,
     IndexArray,
     LodMesh,
     Matrix4,
     ModelPart,
+    ModelProxy,
     ModelResource,
+    MultiAction,
     MultiMesh,
     Primitive,
+    ProbabilityAction,
     RenderEffect,
     Skeleton,
     SkeletonAnimation,
@@ -175,6 +180,12 @@ class _EntityRenderReference:
     decoder: CoreDecoder
     reference: CoreReference
     destructibility: _DestructibilityRenderInfo | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _StagedCreationBranch:
+    probability: float
+    action_indices: frozenset[int]
 
 
 def import_core_file(
@@ -763,6 +774,11 @@ def import_psarc_entity(
     placement["kz2_entity_resource_source"] = core.source
 
     entity_armatures: dict[tuple[int, int], _EntityArmature] = {}
+    static_templates: dict[tuple[int, int, int], _MeshTemplate] = {}
+    skinned_templates: dict[
+        tuple[int, int, int],
+        _SkinnedMeshTemplate,
+    ] = {}
     result.meshes = _create_entity_render_objects(
         collection,
         placement,
@@ -773,13 +789,26 @@ def import_psarc_entity(
         result,
         material_builder,
         external_resolver,
-        {},
-        {},
+        static_templates,
+        skinned_templates,
         None,
         context=context,
         armatures=entity_armatures,
         import_child_animations=True,
     )
+    if options.import_static_meshes:
+        result.meshes += _create_staged_destruction_entities(
+            context,
+            collection,
+            placement,
+            ResolvedResource(decoder, record, entity_value),
+            options,
+            result,
+            material_builder,
+            external_resolver,
+            static_templates,
+            skinned_templates,
+        )
     if options.import_animations:
         result.actions += _create_cached_entity_actions(
             context,
@@ -832,6 +861,360 @@ def _activate_cached_entity_armature(
     )
     if action is not None and action.use_frame_range:
         context.scene.frame_set(round(action.frame_start))
+
+
+def _create_staged_destruction_entities(
+    context: bpy.types.Context,
+    collection: bpy.types.Collection,
+    placement: bpy.types.Object,
+    entity: ResolvedResource,
+    options: ImportOptions,
+    result: ImportResult,
+    material_builder: MaterialBuilder | None,
+    external_resolver: PsarcResourceResolver | None,
+    static_templates: dict[tuple[int, int, int], _MeshTemplate],
+    skinned_templates: dict[
+        tuple[int, int, int],
+        _SkinnedMeshTemplate,
+    ],
+) -> int:
+    entity_value = entity.value
+    if not isinstance(entity_value, EntityResource):
+        return 0
+    branches = _staged_creation_branches(
+        entity.decoder,
+        entity_value.prefix.name,
+    )
+    if not branches:
+        return 0
+
+    creations: dict[
+        int,
+        tuple[CoreObject, CreateEntityAction, ResolvedResource],
+    ] = {}
+    for action_index in sorted(
+        set().union(*(branch.action_indices for branch in branches))
+    ):
+        action_record = entity.decoder.core.objects[action_index]
+        action_value = entity.decoder.decode(action_record)
+        if not isinstance(action_value, CreateEntityAction):
+            continue
+        target = _resolve_reference(
+            entity.decoder,
+            action_value.entity,
+            external_resolver,
+        )
+        if (
+            target is None
+            or target.record.type_name not in ENTITY_RESOURCE_TYPES
+            or not isinstance(target.value, EntityResource)
+        ):
+            result.warnings.append(
+                f"CreateEntityAction {action_record.display_id} has an "
+                "unresolved or unsupported staged entity"
+            )
+            continue
+        creations[action_index] = (
+            action_record,
+            action_value,
+            target,
+        )
+    if not creations:
+        return 0
+
+    debris_collection = bpy.data.collections.new(
+        f"{entity_value.prefix.name} Destruction Debris"
+    )
+    collection.children.link(debris_collection)
+    debris_collection.hide_viewport = True
+    debris_collection.hide_render = True
+    debris_collection.hide_select = True
+    debris_collection["kz2_staged_destruction_debris"] = True
+    debris_collection["kz2_creation_branch_count"] = len(branches)
+    debris_collection["kz2_creation_branches"] = "; ".join(
+        _staged_branch_label(branch, creations)
+        for branch in branches
+    )
+
+    created = 0
+    for action_index, (
+        action_record,
+        action_value,
+        target,
+    ) in sorted(
+        creations.items(),
+        key=lambda item: item[1][2].value.prefix.name,
+    ):
+        target_value = target.value
+        target_name = (
+            target_value.prefix.name
+            or f"{target.record.type_name}_{target.record.index:05d}"
+        )
+        debris_placement = bpy.data.objects.new(
+            f"{target_name} (Staged Debris)",
+            None,
+        )
+        debris_placement.empty_display_type = "CUBE"
+        debris_placement.empty_display_size = max(
+            0.2,
+            options.global_scale,
+        )
+        debris_collection.objects.link(debris_placement)
+        debris_placement.parent = placement
+        debris_placement.matrix_basis = _level_matrix(
+            action_value.local_matrix,
+            options,
+        )
+        _set_source_properties(debris_placement, target.record)
+        debris_placement["kz2_staged_destruction_debris"] = True
+        debris_placement["kz2_entity_resource_class"] = (
+            target.record.type_name
+        )
+        debris_placement["kz2_entity_resource_name"] = (
+            target_value.prefix.name
+        )
+        debris_placement["kz2_entity_resource_object_id"] = (
+            target.record.display_id
+        )
+        debris_placement["kz2_entity_resource_source"] = (
+            target.decoder.core.source
+        )
+        debris_placement["kz2_create_action_name"] = (
+            action_value.prefix.name
+        )
+        debris_placement["kz2_create_action_object_id"] = (
+            action_record.display_id
+        )
+        debris_placement["kz2_create_action_object_index"] = (
+            action_record.index
+        )
+        debris_placement["kz2_spawn_probability"] = sum(
+            branch.probability
+            for branch in branches
+            if action_index in branch.action_indices
+        )
+        debris_placement["kz2_create_local_matrix"] = [
+            value
+            for row in action_value.local_matrix
+            for value in row
+        ]
+        created += _create_entity_render_objects(
+            debris_collection,
+            debris_placement,
+            target,
+            f"{target.record.display_id} ({target_name}, staged debris)",
+            target.record,
+            options,
+            result,
+            material_builder,
+            external_resolver,
+            static_templates,
+            skinned_templates,
+            None,
+            context=context,
+            armatures={},
+            import_child_animations=False,
+        )
+        result.entity_instances += 1
+    placement["kz2_staged_destruction_debris_count"] = len(creations)
+    return created
+
+
+def _staged_branch_label(
+    branch: _StagedCreationBranch,
+    creations: dict[
+        int,
+        tuple[CoreObject, CreateEntityAction, ResolvedResource],
+    ],
+) -> str:
+    names = sorted(
+        creations[action_index][2].value.prefix.name
+        for action_index in branch.action_indices
+        if action_index in creations
+    )
+    return f"{branch.probability:.6g}: {', '.join(names)}"
+
+
+def _staged_creation_branches(
+    decoder: CoreDecoder,
+    entity_name: str,
+) -> tuple[_StagedCreationBranch, ...]:
+    if not entity_name:
+        return ()
+    action_nodes: dict[
+        int,
+        CreateEntityAction | MultiAction | ProbabilityAction,
+    ] = {}
+    probability_indices = set()
+    for record in decoder.core.objects:
+        if record.type_name != "ProbabilityAction":
+            continue
+        reader = decoder.core.reader_for(record)
+        prefix = read_resource_prefix(decoder, reader)
+        if not prefix.name.startswith(f"{entity_name}_State_"):
+            continue
+        value = decoder.decode(record)
+        if not isinstance(value, ProbabilityAction):
+            continue
+        action_nodes[record.index] = value
+        probability_indices.add(record.index)
+    if not probability_indices:
+        return ()
+
+    referenced_indices = {
+        reference.local_index
+        for index, value in action_nodes.items()
+        if index in probability_indices
+        for reference in _gameplay_action_references(value)
+        if reference.local_index is not None
+    }
+    root_indices = sorted(probability_indices - referenced_indices)
+    if not root_indices:
+        return ()
+
+    evaluated_roots = []
+    for root_index in root_indices:
+        branches = _evaluate_gameplay_action(
+            root_index,
+            decoder,
+            action_nodes,
+            set(),
+        )
+        if branches:
+            evaluated_roots.append((root_index, branches))
+    if not evaluated_roots:
+        return ()
+    _, selected = max(
+        evaluated_roots,
+        key=lambda item: (
+            len(set().union(*item[1])),
+            -item[0],
+        ),
+    )
+    total_probability = sum(selected.values())
+    if total_probability <= 0.0:
+        return ()
+    return tuple(
+        _StagedCreationBranch(
+            probability=probability / total_probability,
+            action_indices=action_indices,
+        )
+        for action_indices, probability in sorted(
+            selected.items(),
+            key=lambda item: (
+                -len(item[0]),
+                tuple(sorted(item[0])),
+            ),
+        )
+        if action_indices
+    )
+
+
+def _gameplay_action_references(
+    action: CreateEntityAction | MultiAction | ProbabilityAction,
+) -> tuple[CoreReference, ...]:
+    if isinstance(action, MultiAction):
+        return action.actions
+    if isinstance(action, ProbabilityAction):
+        return (
+            action.primary_action,
+            action.secondary_action,
+        )
+    return ()
+
+
+def _evaluate_gameplay_action(
+    action_index: int,
+    decoder: CoreDecoder,
+    action_nodes: dict[
+        int,
+        CreateEntityAction | MultiAction | ProbabilityAction,
+    ],
+    visiting: set[int],
+) -> dict[frozenset[int], float]:
+    if action_index in visiting:
+        return {}
+    action = action_nodes.get(action_index)
+    if action is None:
+        if not 0 <= action_index < len(decoder.core.objects):
+            return {}
+        record = decoder.core.objects[action_index]
+        if record.type_name not in {
+            "CreateEntityAction",
+            "MultiAction",
+            "ProbabilityAction",
+        }:
+            return {}
+        value = decoder.decode(record)
+        if not isinstance(
+            value,
+            (CreateEntityAction, MultiAction, ProbabilityAction),
+        ):
+            return {}
+        action = value
+        action_nodes[action_index] = action
+    if isinstance(action, CreateEntityAction):
+        return {frozenset((action_index,)): 1.0}
+
+    visiting.add(action_index)
+    try:
+        if isinstance(action, MultiAction):
+            combined: dict[frozenset[int], float] = {
+                frozenset(): 1.0
+            }
+            for reference in action.actions:
+                if reference.local_index is None:
+                    return {}
+                child_branches = _evaluate_gameplay_action(
+                    reference.local_index,
+                    decoder,
+                    action_nodes,
+                    visiting,
+                )
+                if not child_branches:
+                    return {}
+                next_combined: dict[frozenset[int], float] = {}
+                for current_actions, current_probability in combined.items():
+                    for child_actions, child_probability in (
+                        child_branches.items()
+                    ):
+                        merged = current_actions | child_actions
+                        next_combined[merged] = (
+                            next_combined.get(merged, 0.0)
+                            + current_probability * child_probability
+                        )
+                combined = next_combined
+            return combined
+
+        weighted_references = (
+            (
+                action.primary_action,
+                action.primary_probability,
+            ),
+            (
+                action.secondary_action,
+                1.0 - action.primary_probability,
+            ),
+        )
+        branches: dict[frozenset[int], float] = {}
+        for reference, weight in weighted_references:
+            if reference.local_index is None or weight <= 0.0:
+                continue
+            for child_actions, child_probability in (
+                _evaluate_gameplay_action(
+                    reference.local_index,
+                    decoder,
+                    action_nodes,
+                    visiting,
+                ).items()
+            ):
+                branches[child_actions] = (
+                    branches.get(child_actions, 0.0)
+                    + weight * child_probability
+                )
+        return branches
+    finally:
+        visiting.remove(action_index)
 
 
 def _external_resource_ids(decoder: CoreDecoder) -> set[str]:
@@ -1179,6 +1562,19 @@ def _create_level_entity_instances(
             coordinate_basis,
             context=context,
         )
+        if context is not None:
+            created += _create_staged_destruction_entities(
+                context,
+                collection,
+                placement,
+                entity,
+                options,
+                result,
+                material_builder,
+                external_resolver,
+                static_templates,
+                skinned_templates,
+            )
     return created
 
 
@@ -1264,12 +1660,22 @@ def _create_entity_render_objects_impl(
             f"Entity {entity_label} did not decode as an EntityResource"
         )
         return 0
+    has_model_proxy = _set_entity_model_proxy_properties(
+        placement,
+        entity,
+        external_resolver,
+        result,
+    )
     render_references = _entity_render_references(
         entity,
         external_resolver,
         result,
     )
-    if not render_references and not entity_value.child_entities:
+    if (
+        not render_references
+        and not entity_value.child_entities
+        and not has_model_proxy
+    ):
         result.warnings.append(
             f"Entity {entity_label} has no supported render-model reference"
         )
@@ -1893,6 +2299,8 @@ def _entity_render_references(
                         model.value.mesh,
                     )
                 )
+        elif isinstance(model.value, ModelProxy):
+            pass
         else:
             result.warnings.append(
                 f"EntityResource {entity.record.display_id} model has "
@@ -2005,6 +2413,73 @@ def _entity_render_references(
                 )
             )
     return tuple(references)
+
+
+def _set_entity_model_proxy_properties(
+    placement: bpy.types.Object,
+    entity: ResolvedResource,
+    external_resolver: PsarcResourceResolver | None,
+    result: ImportResult,
+) -> bool:
+    entity_value = entity.value
+    if not isinstance(entity_value, EntityResource):
+        return False
+    try:
+        model = _resolve_reference(
+            entity.decoder,
+            entity_value.model,
+            external_resolver,
+        )
+    except FormatError:
+        return False
+    if model is None or not isinstance(model.value, ModelProxy):
+        return False
+
+    proxy = model.value
+    placement["kz2_model_proxy"] = True
+    placement["kz2_model_proxy_name"] = proxy.prefix.name
+    placement["kz2_model_proxy_object_id"] = model.record.display_id
+    placement["kz2_model_proxy_header"] = proxy.header.hex()
+    placement["kz2_model_proxy_parameter_count"] = len(
+        proxy.parameter_mappings
+    )
+    placement["kz2_model_proxy_parameter_mappings"] = "; ".join(
+        f"{source} -> {target}"
+        for source, target in proxy.parameter_mappings
+    )
+    if proxy.trailing:
+        placement["kz2_model_proxy_trailing"] = proxy.trailing.hex()
+
+    try:
+        target = _resolve_reference(
+            model.decoder,
+            proxy.target_model,
+            external_resolver,
+        )
+    except FormatError as exc:
+        result.warnings.append(
+            f"ModelProxyResource {model.record.display_id} target could "
+            f"not be resolved: {exc}"
+        )
+        return True
+    if target is None:
+        result.warnings.append(
+            f"ModelProxyResource {model.record.display_id} target is "
+            "unresolved"
+        )
+        return True
+    placement["kz2_model_proxy_target_object_id"] = target.record.display_id
+    placement["kz2_model_proxy_target_type"] = target.record.type_name
+    if isinstance(target.value, ModelResource):
+        placement["kz2_model_proxy_target_name"] = (
+            target.value.prefix.name
+        )
+    else:
+        result.warnings.append(
+            f"ModelProxyResource {model.record.display_id} target has "
+            f"unsupported type {target.record.type_name}"
+        )
+    return True
 
 
 def _resolve_reference(
@@ -2874,6 +3349,26 @@ def _create_mesh_data(
     # level meshes.
     loop_vertices = [0] * len(mesh_data.loops)
     mesh_data.loops.foreach_get("vertex_index", loop_vertices)
+    colors = decode_semantic(vertex_array, VertexSemantic.COLOR)
+    if colors is not None and len(colors) == len(mesh_data.vertices):
+        color_attribute = mesh_data.color_attributes.new(
+            name=KZ2_VERTEX_COLOR_ATTRIBUTE,
+            type="FLOAT_COLOR",
+            domain="CORNER",
+        )
+        color_attribute.data.foreach_set(
+            "color",
+            [
+                (
+                    color[component]
+                    if component < len(color)
+                    else (1.0 if component == 3 else 0.0)
+                )
+                for vertex_index in loop_vertices
+                for color in (colors[vertex_index],)
+                for component in range(4)
+            ],
+        )
     for uv_index, semantic in enumerate(
         (
             VertexSemantic.UV0,

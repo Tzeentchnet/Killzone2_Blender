@@ -333,6 +333,15 @@ warning rather than being silently ignored.
 `StaticModelResource` and `SkinnedModelResource` each contain a resource
 prefix, one mesh reference, and raw trailing bytes.
 
+`ModelProxyResource` contains a resource prefix, a retained 19-byte header,
+a target-model reference, a big-endian `u16` mapping count, and source/target
+controller-name pairs. A proxy is metadata, not a second render model.
+Blender records the target identity and mappings on the entity placement.
+For `HGH_Fighter_MG_Turret`, the decoded pairs are:
+
+- `Aim Heading` -> `Turret Aim Heading`;
+- `Aim Pitch` -> `Turret Aim Pitch`.
+
 `ModelPartResource` similarly links to one mesh.
 `DestructibilityPartStateResource` links to one model part. These chains let
 the importer reach intact renderable mesh states without decoding complete
@@ -414,6 +423,42 @@ validated on known shifted retail layouts. The 144-byte allocation unit and
 per-part fields are RTTI-backed; the internal meaning of the resource header
 and some trailing state fields has not been proven.
 
+### Staged creation actions
+
+Three gameplay action records have exact framing:
+
+- `CreateEntityAction`: resource prefix, two retained header bytes, entity
+  reference, local 4x4 creation matrix, and trailing bytes;
+- `MultiAction`: resource prefix, two retained header bytes, compact action
+  count, action references, and trailing bytes;
+- `ProbabilityAction`: resource prefix, two retained header bytes, primary
+  and secondary action references, primary `f32` probability, and trailing
+  bytes.
+
+The importer evaluates an entity's local, acyclic
+`ProbabilityAction`/`MultiAction` tree when it resolves entirely to
+`CreateEntityAction` leaves. Renderable created entities are imported once
+into a hidden, non-rendering destruction-debris collection. Their placement
+empties retain the create-action identity, source matrix, and marginal spawn
+probability.
+
+For `HGH_Fighter [1945]`, the terminal damage graph produces:
+
+| Branch | Probability |
+|---|---:|
+| Nose + left wing + right wing | 0.50 |
+| Nose + left wing | 0.25 |
+| Left wing + right wing | 0.25 |
+
+The left wing therefore has marginal probability 1.0; the nose and right
+wing each have marginal probability 0.75. Their source translations are
+`(-3.24705, -2.29214, 0.739711)`, `(0, 3.22095, 1.84452)`, and
+`(3.24705, -2.29214, 0.739711)` respectively.
+
+This is a static inspection representation. Blender does not execute the
+damage timeline, detach the parts, apply impulses, enable smoke or explosion
+effects, or simulate their physics.
+
 ## Framing versus Blender support
 
 Exact framing means the importer can find the next object without consuming
@@ -436,13 +481,18 @@ Currently:
 - Direct serializer coverage is profile-locked. An unknown zero-sized type
   cannot be skipped safely and is rejected.
 - Level discovery depends on retail manifest naming conventions.
-- Complete gameplay dependency graphs and behaviors are not decoded.
+- Complete gameplay dependency graphs and behaviors are not decoded. The
+  typed create/multi/probability subset is evaluated only for bounded local
+  creation trees.
 - Destructibility selection uses the explicit candidate heuristic documented
   above.
 - Humanoid imports currently select the first/default body variant rather
   than exposing variant selection in the UI.
 - Destructible-part detachment, shot-off transitions, and dynamic physics are
-  not reproduced; Blender imports the initial bone-attached state.
+  not reproduced; Blender imports the initial bone-attached state or hidden
+  staged debris where a supported creation tree is present.
 - Only static render placements and mesh-backed entity placeholders have
   specialized Blender adapters.
 - `GameScript` is structurally parsed but not disassembled or executed.
+- Path movers, timelines, and scripted flight paths are retained or ignored
+  according to their existing metadata support and are not reconstructed.

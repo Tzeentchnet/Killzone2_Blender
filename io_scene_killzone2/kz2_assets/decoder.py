@@ -16,10 +16,14 @@ from .entities import (
     ATTACHMENT_MOVER_TYPES,
     ENTITY_RESOURCE_TYPES,
     parse_attachment_mover,
+    parse_create_entity_action,
     parse_destructibility_part_state,
     parse_entity_resource,
     parse_model_part,
+    parse_model_proxy,
     parse_model_resource,
+    parse_multi_action,
+    parse_probability_action,
     parse_state_based_destructibility,
 )
 from .geometry import (
@@ -104,7 +108,11 @@ _PARSERS = {
     "ShaderResource": parse_shader_resource,
     "StaticModelResource": parse_model_resource,
     "SkinnedModelResource": parse_model_resource,
+    "ModelProxyResource": parse_model_proxy,
     "ModelPartResource": parse_model_part,
+    "CreateEntityAction": parse_create_entity_action,
+    "MultiAction": parse_multi_action,
+    "ProbabilityAction": parse_probability_action,
     "DestructibilityPartStateResource": parse_destructibility_part_state,
     "StateBasedDestructibilityResource": parse_state_based_destructibility,
 }

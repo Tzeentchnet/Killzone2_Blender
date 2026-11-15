@@ -151,6 +151,188 @@ class BlenderEntityImportTests(unittest.TestCase):
                         )
                         self.assertEqual("UV0", secondary_uv.uv_map)
 
+    def assert_vehicle_material_profiles(
+        self,
+        expected: dict[str, str | None],
+    ) -> None:
+        materials_by_shader: dict[str, list] = {}
+        for material in bpy.data.materials:
+            shader_id = material.get("kz2_shader_object_id")
+            if isinstance(shader_id, str):
+                materials_by_shader.setdefault(shader_id, []).append(
+                    material
+                )
+
+        self.assertEqual(set(expected), set(materials_by_shader))
+        for shader_id, materials in materials_by_shader.items():
+            profile_id = expected[shader_id]
+            for material in materials:
+                with self.subTest(
+                    material=material.name,
+                    shader_id=shader_id,
+                ):
+                    self.assertEqual(
+                        profile_id,
+                        material.get("kz2_profile_id"),
+                    )
+                    if profile_id is None:
+                        continue
+
+                    nodes = material.node_tree.nodes
+                    principled = next(
+                        node
+                        for node in nodes
+                        if node.bl_idname == "ShaderNodeBsdfPrincipled"
+                    )
+                    secondary_sampler = material.get(
+                        "kz2_profile_secondary_base_color_sampler"
+                    )
+                    if secondary_sampler is not None:
+                        self.assertEqual(
+                            "multiply",
+                            material[
+                                "kz2_preview_base_color_combine"
+                            ],
+                        )
+                        self.assertEqual(
+                            "KZ2_BaseColorMultiply",
+                            principled.inputs["Base Color"]
+                            .links[0]
+                            .from_node.name,
+                        )
+
+                    normal_sampler = material.get(
+                        "kz2_profile_normal_sampler"
+                    )
+                    if normal_sampler is not None:
+                        normal_node = next(
+                            node
+                            for node in nodes
+                            if node.get("kz2_sampler")
+                            == normal_sampler
+                        )
+                        self.assertEqual(
+                            "Non-Color",
+                            normal_node.image.colorspace_settings.name,
+                        )
+                        if normal_node.image["kz2_color_space"] == 1:
+                            self.assertEqual(
+                                "shader_profile",
+                                normal_node.image[
+                                    "kz2_color_space_override"
+                                ],
+                            )
+                        self.assertEqual(
+                            "KZ2_NormalMap",
+                            principled.inputs["Normal"]
+                            .links[0]
+                            .from_node.name,
+                        )
+                        self.assertFalse(
+                            material["kz2_profile_normal_y_flip"]
+                        )
+                        self.assertTrue(
+                            material["kz2_preview_normal_y_flip"]
+                        )
+
+                    detail_sampler = material.get(
+                        "kz2_profile_detail_normal_sampler"
+                    )
+                    if detail_sampler is not None:
+                        detail_node = next(
+                            node
+                            for node in nodes
+                            if node.get("kz2_sampler")
+                            == detail_sampler
+                        )
+                        self.assertIn(
+                            "detail normal",
+                            detail_node["kz2_profile_role"],
+                        )
+                        self.assertEqual(
+                            "Non-Color",
+                            detail_node.image.colorspace_settings.name,
+                        )
+                        if detail_node.image["kz2_color_space"] == 1:
+                            self.assertEqual(
+                                "shader_profile",
+                                detail_node.image[
+                                    "kz2_color_space_override"
+                                ],
+                            )
+                        self.assertFalse(
+                            any(
+                                output.is_linked
+                                for output in detail_node.outputs
+                            )
+                        )
+                        self.assertEqual(
+                            "retained unconnected",
+                            material["kz2_preview_detail_normal"],
+                        )
+
+                    material_sampler = material.get(
+                        "kz2_profile_material_sampler"
+                    )
+                    if material_sampler is not None:
+                        material_node = next(
+                            node
+                            for node in nodes
+                            if node.get("kz2_sampler")
+                            == material_sampler
+                        )
+                        self.assertIn(
+                            "packed material",
+                            material_node["kz2_profile_role"],
+                        )
+                        self.assertEqual(
+                            "Non-Color",
+                            material_node.image.colorspace_settings.name,
+                        )
+                        if material_node.image["kz2_color_space"] == 1:
+                            self.assertEqual(
+                                "shader_profile",
+                                material_node.image[
+                                    "kz2_color_space_override"
+                                ],
+                            )
+                        if (
+                            "kz2_profile_specular_power_channel"
+                            in material
+                        ):
+                            self.assertTrue(
+                                principled.inputs["Roughness"].is_linked
+                            )
+                            self.assertTrue(
+                                principled.inputs[
+                                    "Specular IOR Level"
+                                ].is_linked
+                            )
+                        else:
+                            self.assertFalse(
+                                principled.inputs["Roughness"].is_linked
+                            )
+                            self.assertFalse(
+                                principled.inputs[
+                                    "Specular IOR Level"
+                                ].is_linked
+                            )
+
+                    reflection_sampler = material.get(
+                        "kz2_profile_reflection_sampler"
+                    )
+                    if reflection_sampler is not None:
+                        reflection_node = next(
+                            node
+                            for node in nodes
+                            if node.get("kz2_sampler")
+                            == reflection_sampler
+                        )
+                        self.assertIn(
+                            "IBL lookup",
+                            reflection_node["kz2_profile_role"],
+                        )
+
     def test_dropship_imports_attached_turrets_and_profiled_material(
         self,
     ) -> None:
@@ -371,6 +553,15 @@ class BlenderEntityImportTests(unittest.TestCase):
             "KZ2_Roughness",
             principled.inputs["Roughness"].links[0].from_node.name,
         )
+        reflection = next(
+            node
+            for node in material.node_tree.nodes
+            if node.get("kz2_sampler") == "inSampler2"
+        )
+        self.assertEqual(
+            "Non-Color",
+            reflection.image.colorspace_settings.name,
+        )
         self.assertTrue(
             principled.inputs["Specular IOR Level"].is_linked
         )
@@ -407,6 +598,26 @@ class BlenderEntityImportTests(unittest.TestCase):
         self.assertEqual(
             "Non-Color",
             normal_texture.image.colorspace_settings.name,
+        )
+        self.assert_vehicle_material_profiles(
+            {
+                "c54604143359f6cb1e7766c8fa2a3b38": (
+                    "hgh_dropship_deferred"
+                ),
+                "0f8732ddf90aacb3a9f3b4c1e63fc752": (
+                    "hgh_dropship_unbumped_deferred"
+                ),
+                "8c77e857231655920b6e4835ab731d4b": (
+                    "hgh_dropship_deferred"
+                ),
+                "f33af2aa7a87628344572d581f1dda8f": None,
+                "6b2068005285c8ab951a526590a4d8a4": (
+                    "hgh_dropship_complex_deferred"
+                ),
+                "ed94308fbe5e1714583b41e9e0e7e3c0": (
+                    "hgh_dropship_deferred_g49"
+                ),
+            }
         )
 
     @unittest.skipUnless(
@@ -482,14 +693,29 @@ class BlenderEntityImportTests(unittest.TestCase):
                     for node in material.node_tree.nodes
                     if node.bl_idname == "ShaderNodeBsdfPrincipled"
                 )
-                texture = (
-                    principled.inputs["Base Color"].links[0].from_node
+                color_mix = (
+                    principled.inputs["Base Color"]
+                    .links[0]
+                    .from_node
                 )
+                self.assertEqual("KZ2_BaseColorMultiply", color_mix.name)
+                texture = color_mix.inputs["Color1"].links[0].from_node
                 self.assertEqual("inSampler0", texture["kz2_sampler"])
                 mapping = texture.inputs["Vector"].links[0].from_node
                 self.assertEqual("KZ2_DiffuseUVTransform", mapping.name)
                 uv = mapping.inputs["Vector"].links[0].from_node
                 self.assertEqual("DiffuseUV", uv.uv_map)
+                secondary = (
+                    color_mix.inputs["Color2"].links[0].from_node
+                )
+                self.assertEqual(
+                    "inSampler1",
+                    secondary["kz2_sampler"],
+                )
+                secondary_uv = (
+                    secondary.inputs["Vector"].links[0].from_node
+                )
+                self.assertEqual("UV0", secondary_uv.uv_map)
 
         profiled_meshes = [
             obj
@@ -509,6 +735,271 @@ class BlenderEntityImportTests(unittest.TestCase):
                 for obj in profiled_meshes
             )
         )
+        self.assert_vehicle_material_profiles(
+            {
+                "454c34802c8ecfd0f88b37607d5b615b": (
+                    "isa_intruder_deferred"
+                ),
+                "631dc38edec0712bbb2713bb8a048023": (
+                    "isa_intruder_detail_deferred"
+                ),
+                "c69e155a3ee8bf78fb69eb313bd02765": (
+                    "isa_intruder_detail_deferred"
+                ),
+            }
+        )
+
+    @unittest.skipUnless(
+        os.environ.get("KZ2_EXHAUSTIVE_E2E") == "1",
+        "requires KZ2_EXHAUSTIVE_E2E=1",
+    )
+    def test_retail_vehicle_material_profiles(self) -> None:
+        from io_scene_killzone2.import_scene import (
+            ImportOptions,
+            import_psarc_entity,
+        )
+
+        cases = (
+            (
+                "HGH AAPC",
+                (
+                    "LocalCachePS3/lumps/"
+                    "assets_description.vehicles.hgh_aapc_hgh_aapc.core"
+                ),
+                564,
+                48,
+                {
+                    "c1ad2d75a5e9d53144d03f7e7f0cd1f0": (
+                        "hgh_aapc_layered_deferred_r49"
+                    ),
+                    "b0dd8ab243f2fca164a71515eae0d632": None,
+                    "0890fcb06e287f8411043cff206489a5": None,
+                    "b0a8b52eb0560707ecc42dc8c1ec7f88": (
+                        "hgh_tank_compact_deferred"
+                    ),
+                    "a58e7b007d4d88e2ddfaa61af86a4ab7": (
+                        "hgh_tank_packed_g49"
+                    ),
+                    "4e627d3e772982d7744b52997d7652d4": None,
+                    "231c838d776735259ccce8f62ac1c3fd": None,
+                    "5c879214cf2789ce4728d5de9d9cbc16": (
+                        "hgh_tank_packed_r49"
+                    ),
+                    "9a0fa36f2abfa919579d6395db377b27": (
+                        "hgh_aapc_layered_deferred"
+                    ),
+                    "621754830acce3e2cc48c3d61013012b": None,
+                    "c0d90d1ad5eaed9ee58cd8ab7dc82471": (
+                        "hgh_aapc_ramp_deferred"
+                    ),
+                },
+            ),
+            (
+                "ISA Buggy",
+                (
+                    "LocalCachePS3/lumps/"
+                    "assets_description.vehicles.isa_buggy_isa_buggy.core"
+                ),
+                892,
+                72,
+                {
+                    "6f62459a7e6472f7e324bbfd6f863e9b": (
+                        "isa_buggy_compact_deferred"
+                    ),
+                    "c0c99abb39f9e039272da739390ad8f9": (
+                        "isa_buggy_secondary_material_deferred"
+                    ),
+                    "4e627d3e772982d7744b52997d7652d4": None,
+                    "ef63afc5d7b34083a33cd95d15f245e1": (
+                        "isa_buggy_layered_deferred"
+                    ),
+                    "4f122b99db7e4223fd2865254cf1d158": (
+                        "isa_buggy_secondary_deferred"
+                    ),
+                    "84bf4d0f1cc0cfa07c99026d56dbc6a7": None,
+                    "d88b4827b93df92d3d55a281ad3f80bd": None,
+                    "6ecc1dabafc42f2a93c41a50df1b6687": (
+                        "isa_buggy_layered_deferred"
+                    ),
+                    "68ae7bd3dc772eba0f771647de94cb4f": None,
+                    "f8f6ce14f8ba83f5f28a17da586ce44a": (
+                        "isa_buggy_ramp_deferred_r49"
+                    ),
+                    "76ffdeeb808e529cf740647846a61a6a": None,
+                    "aab8fd8e71d04ac7493f3ce2ec02acb4": (
+                        "isa_buggy_response_ramp_deferred_r49"
+                    ),
+                    "ed0bf92f2fbcc1902857fbc6aabb9500": None,
+                },
+            ),
+            (
+                "ISA Exoskeleton",
+                (
+                    "LocalCachePS3/lumps/"
+                    "assets_description.vehicles.isa_exoskeleton_"
+                    "isa_exoskeleton.core"
+                ),
+                368,
+                12,
+                {
+                    "6663cddd2e0e77f8f5122319895b05de": None,
+                    "a61e51472c418e6f30154536683653fd": (
+                        "isa_exoskeleton_layered_deferred"
+                    ),
+                    "7de10c6edd018eeed89312a403ef4f83": (
+                        "isa_exoskeleton_response_deferred"
+                    ),
+                    "a715f1d41d0e6be11eaea6d4071df562": (
+                        "isa_exoskeleton_layered_deferred"
+                    ),
+                },
+            ),
+            (
+                "ISA AAPC",
+                (
+                    "LocalCachePS3/lumps/"
+                    "levels.single_player.corinth_river."
+                    "section_02_facility.assets_optimized_"
+                    "sharedsharedwp_isaaapc.core"
+                ),
+                958,
+                63,
+                {
+                    "dba9a590a94521dfe9d6c8bde893b51d": None,
+                    "9226fca0d5b4e93ef67ad5ba9c9f4bc0": None,
+                    "d8de6701c66b7caece3b70e3555b198b": (
+                        "isa_tank_compact_deferred"
+                    ),
+                    "8735cb04da386a30d617748a6c942f86": (
+                        "isa_aapc_ramp_deferred"
+                    ),
+                    "4e627d3e772982d7744b52997d7652d4": None,
+                    "4a209aac9aeef3306dce19e46527d0fa": (
+                        "isa_aapc_layered_deferred"
+                    ),
+                    "b87a2ff0d9c2aad4cdbd231b0cc2b9d6": (
+                        "isa_aapc_layered_deferred"
+                    ),
+                    "152325d374d7231cd503d72edc7e5de7": (
+                        "isa_aapc_layered_deferred"
+                    ),
+                    "1ed8c531fb7f936c69492669042b94f0": (
+                        "isa_aapc_layered_deferred"
+                    ),
+                    "616083d7b97f21c7175a098bbc01b493": (
+                        "isa_aapc_ramp_deferred_g49"
+                    ),
+                    "b70abca563d77e78e524175957fe9d76": None,
+                    "406ed5c26dc5c3d5d3ed3fc501004304": (
+                        "isa_aapc_compact_masked_deferred"
+                    ),
+                    "9688112c2f4711397c49debe72fcd216": (
+                        "isa_aapc_compact_masked_deferred"
+                    ),
+                },
+            ),
+            (
+                "HGH ATAC",
+                (
+                    "LocalCachePS3/lumps/"
+                    "levels.single_player.blood_meridian."
+                    "section_05_arctower.assets_optimized_"
+                    "arctowergpseq_hghatac_hghsentrybot_"
+                    "arctowerhi_mainsquareartbsp.core"
+                ),
+                20,
+                6,
+                {
+                    "f8ad3999502f015448dce15888a17263": (
+                        "hgh_atac_deferred"
+                    ),
+                },
+            ),
+            (
+                "HGH Cruiser",
+                (
+                    "LocalCachePS3/lumps/"
+                    "levels.single_player.the_cruiser.section_outro."
+                    "assets_optimized_outrogp_outrohi_isatemplar_"
+                    "isaevelyn_hghradec.core"
+                ),
+                683,
+                20,
+                {
+                    "41fbce422ba9b57233d82e90965cc6d7": None,
+                    "7511eed9983ae59c434a301c52d28ccf": (
+                        "hgh_cruiser_compact_deferred"
+                    ),
+                    "cfb995ef1c6f06bb97384e211a4d4b81": (
+                        "hgh_cruiser_deferred_g12_25"
+                    ),
+                    "def4c8fbe2b0ff5e5f00548cbb4ef0ea": (
+                        "hgh_cruiser_compact_deferred"
+                    ),
+                    "1717d873cb90d6a8fc5cc44dac5d7fc8": (
+                        "hgh_cruiser_layered_deferred"
+                    ),
+                },
+            ),
+            (
+                "ISA Cruiser",
+                (
+                    "LocalCachePS3/lumps/"
+                    "levels.single_player.corinth_river."
+                    "section_thenewsun_mirror.assets_optimized_"
+                    "isabridgecrew_isabridgecrew_gpshared_"
+                    "artlaunchbayhigh_thenewsun_cutscenesnsoutra.core"
+                ),
+                603,
+                16,
+                {
+                    "f1ef6049dec3cd24a903e307d77f0be4": (
+                        "isa_cruiser_layered_deferred"
+                    ),
+                    "c6dcc542d690fc4761ab407049ad4873": (
+                        "isa_cruiser_layered_deferred"
+                    ),
+                    "c4f7e7bcb20c3fc6c54b2e469dcb264b": (
+                        "isa_cruiser_masked_deferred"
+                    ),
+                    "5b0789b6e9abb31163bdbe55a8111d99": (
+                        "isa_cruiser_layered_deferred"
+                    ),
+                },
+            ),
+        )
+        archive_path = str(Path(os.environ["KZ2_PSARC"]).resolve())
+        for (
+            vehicle,
+            core_path,
+            entity_id,
+            expected_meshes,
+            expected_profiles,
+        ) in cases:
+            with self.subTest(vehicle=vehicle):
+                bpy.ops.wm.read_factory_settings(use_empty=True)
+                result = import_psarc_entity(
+                    bpy.context,
+                    archive_path,
+                    core_path,
+                    entity_id,
+                    ImportOptions(
+                        source_psarc=archive_path,
+                        resource_index_path=os.environ.get(
+                            "KZ2_RESOURCE_INDEX",
+                            "",
+                        ),
+                        import_materials=True,
+                        import_animations=False,
+                        import_fake_shadow_meshes=True,
+                        flip_uv_v=True,
+                    ),
+                )
+
+                self.assertEqual(expected_meshes, result.meshes)
+                self.assert_vehicle_material_profiles(
+                    expected_profiles
+                )
 
     @unittest.skipUnless(
         os.environ.get("KZ2_EXHAUSTIVE_E2E") == "1",
@@ -1210,6 +1701,214 @@ class BlenderEntityImportTests(unittest.TestCase):
         os.environ.get("KZ2_EXHAUSTIVE_E2E") == "1",
         "requires KZ2_EXHAUSTIVE_E2E=1",
     )
+    def test_hgh_fighter_materials_debris_and_model_proxy(self) -> None:
+        from io_scene_killzone2.import_scene import (
+            ImportOptions,
+            import_psarc_entity,
+        )
+
+        archive_path = str(Path(os.environ["KZ2_PSARC"]).resolve())
+        core_path = (
+            "LocalCachePS3/lumps/"
+            "levels.single_player.the_cruiser.section_landingbay."
+            "assets_optimized_landingbaygpst_landingbayst_hghfighter.core"
+        )
+        options = ImportOptions(
+            source_psarc=archive_path,
+            resource_index_path=os.environ.get(
+                "KZ2_RESOURCE_INDEX",
+                "",
+            ),
+            import_materials=True,
+            import_animations=False,
+        )
+
+        result = import_psarc_entity(
+            bpy.context,
+            archive_path,
+            core_path,
+            1945,
+            options,
+        )
+
+        self.assertEqual(4, result.meshes)
+        self.assertEqual(4, result.entity_instances)
+        self.assertEqual(2, result.materials)
+        self.assertEqual([], result.warnings)
+        root = next(
+            obj
+            for obj in bpy.data.objects
+            if obj.get("kz2_cached_entity")
+            and obj.get("kz2_entity_resource_name") == "HGH_Fighter"
+        )
+        self.assertEqual(
+            3,
+            root["kz2_staged_destruction_debris_count"],
+        )
+        debris_collection = next(
+            collection
+            for collection in bpy.data.collections
+            if collection.get("kz2_staged_destruction_debris")
+        )
+        self.assertTrue(debris_collection.hide_viewport)
+        self.assertTrue(debris_collection.hide_render)
+        self.assertEqual(
+            (
+                "0.5: HGH_Fighter_Left_Wing, HGH_Fighter_Nose, "
+                "HGH_Fighter_Right_Wing; 0.25: HGH_Fighter_Left_Wing, "
+                "HGH_Fighter_Nose; 0.25: HGH_Fighter_Left_Wing, "
+                "HGH_Fighter_Right_Wing"
+            ),
+            debris_collection["kz2_creation_branches"],
+        )
+        debris = {
+            obj["kz2_entity_resource_name"]: obj
+            for obj in debris_collection.objects
+            if obj.get("kz2_staged_destruction_debris")
+        }
+        self.assertEqual(
+            {
+                "HGH_Fighter_Left_Wing",
+                "HGH_Fighter_Nose",
+                "HGH_Fighter_Right_Wing",
+            },
+            debris.keys(),
+        )
+        expected_debris = {
+            "HGH_Fighter_Left_Wing": (
+                (-3.24705, -2.29214, 0.739711),
+                1.0,
+            ),
+            "HGH_Fighter_Nose": (
+                (0.0, 3.22095, 1.84452),
+                0.75,
+            ),
+            "HGH_Fighter_Right_Wing": (
+                (3.24705, -2.29214, 0.739711),
+                0.75,
+            ),
+        }
+        for name, (translation, probability) in expected_debris.items():
+            with self.subTest(debris=name):
+                placement = debris[name]
+                for observed, expected in zip(
+                    placement.matrix_basis.translation,
+                    translation,
+                    strict=True,
+                ):
+                    self.assertAlmostEqual(expected, observed, places=5)
+                self.assertAlmostEqual(
+                    probability,
+                    placement["kz2_spawn_probability"],
+                )
+                self.assertEqual(
+                    1,
+                    len(
+                        [
+                            obj
+                            for obj in debris_collection.all_objects
+                            if obj.type == "MESH"
+                            and obj.parent == placement
+                        ]
+                    ),
+                )
+
+        materials = {
+            material["kz2_profile_id"]: material
+            for material in bpy.data.materials
+            if material.get("kz2_profile_id")
+            in {"hgh_fighter_skinned", "hgh_fighter_static"}
+        }
+        self.assertEqual(
+            {"hgh_fighter_skinned", "hgh_fighter_static"},
+            materials.keys(),
+        )
+        for profile_id, material in materials.items():
+            with self.subTest(profile_id=profile_id):
+                self.assertEqual(
+                    "G",
+                    material["kz2_profile_specular_power_channel"],
+                )
+                self.assertEqual(
+                    24.5,
+                    material["kz2_profile_specular_power_scale"],
+                )
+                self.assertEqual(
+                    "B",
+                    material["kz2_profile_specular_intensity_channel"],
+                )
+                principled = next(
+                    node
+                    for node in material.node_tree.nodes
+                    if node.bl_idname == "ShaderNodeBsdfPrincipled"
+                )
+                self.assertEqual(
+                    "KZ2_Roughness",
+                    principled.inputs["Roughness"].links[0].from_node.name,
+                )
+                self.assertEqual(
+                    "Non-Color",
+                    material.node_tree.nodes[
+                        "KZ2_01_inSampler1"
+                    ].image.colorspace_settings.name,
+                )
+
+        skinned = materials["hgh_fighter_skinned"]
+        principled = next(
+            node
+            for node in skinned.node_tree.nodes
+            if node.bl_idname == "ShaderNodeBsdfPrincipled"
+        )
+        self.assertEqual(
+            "KZ2_VertexEmissionSquared",
+            principled.inputs["Emission Color"].links[0].from_node.name,
+        )
+        self.assertEqual(
+            "RGB squared",
+            skinned["kz2_preview_vertex_emission"],
+        )
+        fighter_mesh = next(
+            obj.data
+            for obj in bpy.data.objects
+            if obj.type == "MESH"
+            and obj.data.materials
+            and obj.data.materials[0] == skinned
+        )
+        self.assertIsNotNone(fighter_mesh.color_attributes.get("KZ2Color"))
+
+        turret_result = import_psarc_entity(
+            bpy.context,
+            archive_path,
+            core_path,
+            1933,
+            options,
+        )
+        self.assertEqual(0, turret_result.meshes)
+        self.assertEqual([], turret_result.warnings)
+        turret = next(
+            obj
+            for obj in bpy.data.objects
+            if obj.get("kz2_cached_entity")
+            and obj.get("kz2_entity_resource_name")
+            == "HGH_Fighter_MG_Turret"
+        )
+        self.assertTrue(turret["kz2_model_proxy"])
+        self.assertEqual(
+            "HGH_Fighter_Model",
+            turret["kz2_model_proxy_target_name"],
+        )
+        self.assertEqual(
+            (
+                "Aim Heading -> Turret Aim Heading; "
+                "Aim Pitch -> Turret Aim Pitch"
+            ),
+            turret["kz2_model_proxy_parameter_mappings"],
+        )
+
+    @unittest.skipUnless(
+        os.environ.get("KZ2_EXHAUSTIVE_E2E") == "1",
+        "requires KZ2_EXHAUSTIVE_E2E=1",
+    )
     def test_y_animated_commando_helmet_follows_neck(self) -> None:
         from io_scene_killzone2.import_scene import (
             ImportOptions,
@@ -1312,7 +2011,7 @@ class BlenderEntityImportTests(unittest.TestCase):
         )
         existing_objects = set(bpy.data.objects)
 
-        import_psarc_entity(
+        result = import_psarc_entity(
             bpy.context,
             archive_path,
             core_path,
@@ -1323,7 +2022,7 @@ class BlenderEntityImportTests(unittest.TestCase):
                     "KZ2_RESOURCE_INDEX",
                     "",
                 ),
-                import_materials=False,
+                import_materials=True,
                 import_animations=False,
             ),
         )
@@ -1354,6 +2053,56 @@ class BlenderEntityImportTests(unittest.TestCase):
                 for obj in attached
             )
         )
+        expected_shader_ids = {
+            "b80f807760feca99a0e4c53ba91a6475",
+            "c1b648b75e0293d6900410fb35a360f2",
+            "42b632e84a4076e078327f99496fb80b",
+            "26fc5ce3f03d759bc972fc0298994324",
+        }
+        materials = {
+            material["kz2_shader_object_id"]: material
+            for obj in imported_objects
+            if obj.type == "MESH"
+            for material in obj.data.materials
+            if material is not None
+            and material.get("kz2_shader_object_id") in expected_shader_ids
+        }
+        self.assertEqual(4, result.materials)
+        self.assertEqual(expected_shader_ids, materials.keys())
+        for shader_object_id, material in materials.items():
+            with self.subTest(shader_object_id=shader_object_id):
+                self.assertEqual(
+                    "character_standard_deferred",
+                    material["kz2_profile_id"],
+                )
+                self.assertEqual("proven", material["kz2_profile_status"])
+                self.assertEqual(
+                    "inSampler3",
+                    material["kz2_profile_normal_sampler"],
+                )
+                texture_nodes = {
+                    node.get("kz2_sampler"): node
+                    for node in material.node_tree.nodes
+                    if node.bl_idname == "ShaderNodeTexImage"
+                }
+                self.assertEqual(
+                    "Non-Color",
+                    texture_nodes["inSampler1"].image.colorspace_settings.name,
+                )
+                self.assertEqual(
+                    "Non-Color",
+                    texture_nodes["inSampler2"].image.colorspace_settings.name,
+                )
+                principled = next(
+                    node
+                    for node in material.node_tree.nodes
+                    if node.bl_idname == "ShaderNodeBsdfPrincipled"
+                )
+                self.assertEqual(
+                    "KZ2_NormalMap",
+                    principled.inputs["Normal"].links[0].from_node.name,
+                )
+                self.assertFalse(principled.inputs["Roughness"].is_linked)
 
 
 if __name__ == "__main__":
